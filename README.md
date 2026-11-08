@@ -27,7 +27,7 @@ Il logo si carica da **Amministrazione → Impostazioni → Carica nuovo logo** 
 | Richieste | Titolo, descrizione, cliente, data, stato, allegati, autore. Ogni inserimento o modifica resta in **BOZZA** visibile solo all'autore fino a **Pubblica** |
 | Ambulatorio | Calendario settimanale lunedì–sabato, settimana precedente/successiva, **Oggi**, vista calendario o tabella, filtri per medico, operatrice e documenti controllati. Stessa logica bozza → Pubblica |
 | Archivio | Tutto il pubblicato e i calendari settimanali, ricerca per testo, cliente, medico, operatore e date, cronologia delle versioni con autore, data e ora. Solo il Capo può eliminare (con conferma) |
-| Amministrazione | Utenti (crea, modifica, disattiva), medici, interruttore **IA attiva / IA disattivata** con assistente, esportazione Excel settimanale e mensile, registro attività, logo |
+| Amministrazione | Utenti (crea, modifica, disattiva), medici, interruttore **IA attiva / IA disattivata** con assistente, esportazione Excel settimanale e mensile, invio mensile automatico del calendario per email, backup e ripristino, registro attività, logo |
 
 **Blocchi del Capo.** Il Capo può bloccare e sbloccare una singola richiesta, un singolo appuntamento o un'intera settimana. Gli operatori vedono il badge rosso con lucchetto **BLOCCATO DAL CAPO** e l'elemento in sola lettura. Se un operatore lo sta modificando proprio in quel momento, la modifica viene interrotta e compare l'avviso. Il server rifiuta comunque qualsiasi modifica (HTTP 423). Il Capo può sempre modificare anche gli elementi bloccati.
 
@@ -35,33 +35,29 @@ Il logo si carica da **Amministrazione → Impostazioni → Carica nuovo logo** 
 
 **Intelligenza artificiale (Anthropic Claude).** Con l'IA attiva il Capo può riassumere una richiesta e i suoi allegati (PDF, immagini, testo), fare domande in linguaggio naturale sull'archivio, cercare conflitti tra appuntamenti (stesso medico, stesso orario) e generare il riepilogo della settimana o del mese. Con l'IA disattivata le funzioni spariscono dall'interfaccia e il server rifiuta ogni chiamata: nessun dato esce. Per usarla serve la variabile `ANTHROPIC_API_KEY` sul server.
 
-## Archivio su Google Drive dell'amministratore
+## Invio mensile del calendario per email
 
-L'archivio viene copiato automaticamente nel Google Drive del Capo, nella cartella **Ambulatorio – Archivio**, pochi secondi dopo ogni modifica e comunque ogni 10 minuti:
+Il **giorno 1 di ogni mese**, dalle ore 7, l'app invia per email il calendario Excel del mese appena concluso (es. `Ambulatorio_Ottobre_2026.xlsx`, di pochi KB) agli indirizzi impostati dal Capo in **Amministrazione → Backup e invio email**. Se quel giorno il server è spento, l'invio parte appena riparte. Se l'invio fallisce, l'app riprova ogni ora e mostra l'errore nella stessa schermata.
+
+Il Capo può anche inviare a mano il calendario di qualsiasi mese, in due modi: con **Invia ora** nella stessa schermata, oppure con **Invia mese per email** nella pagina Ambulatorio. Ogni invio finisce nel registro attività.
+
+L'email parte dalla **casella di posta dell'ufficio** (SMTP), senza altri servizi esterni. Imposta sul server:
 
 ```
-Ambulatorio – Archivio/
-  Database (backup)/      ambulatorio.db (sempre aggiornato) + ambulatorio_AAAA-MM-GG.db (una al giorno, 30 giorni)
-  Allegati/               "Richiesta 12 - referto.pdf" … (solo richieste pubblicate)
-  Calendari settimanali/  Ambulatorio_Settimana_2026-W45.xlsx …
-  Calendari mensili/      Ambulatorio_Novembre_2026.xlsx …
-  Richieste/              Registro_richieste.xlsx
+SMTP_HOST=smtps.aruba.it     # server di posta in uscita del vostro provider
+SMTP_PORT=465                # 465 (SSL) oppure 587 (STARTTLS)
+SMTP_USER=ufficio@vostrodominio.it
+SMTP_PASS=la-password-della-casella
+MAIL_FROM="Ambulatorio <ufficio@vostrodominio.it>"   # facoltativo
 ```
 
-Un file viene ricaricato solo se è cambiato. Il file si aggiorna dove si trova, senza creare doppioni, e un calendario eliminato dall'app sparisce anche dal Drive. Le bozze non pubblicate non vengono mai copiate. L'app usa il permesso `drive.file`, quindi vede soltanto i file che crea lei e non il resto del Drive.
+Esempi di server in uscita: Aruba `smtps.aruba.it:465`, Libero `smtp.libero.it:465`, Outlook/Microsoft 365 `smtp.office365.com:587`, Gmail `smtp.gmail.com:465` (richiede una "password per le app").
 
-### Configurazione (una sola volta, circa 10 minuti)
-1. Vai su [console.cloud.google.com](https://console.cloud.google.com) con l'account Google del Capo e crea un progetto (es. "Ambulatorio").
-2. **API e servizi → Libreria**: abilita **Google Drive API**.
-3. **API e servizi → Schermata di consenso OAuth**: tipo *Esterno* (o *Interno* con Google Workspace). Inserisci nome app ed email, poi tra gli *Utenti di test* aggiungi l'email del Capo. Pubblica l'app ("In produzione"): in modalità *Test* l'autorizzazione scade dopo 7 giorni.
-4. **API e servizi → Credenziali → Crea credenziali → ID client OAuth**, tipo *Applicazione web*. Come **URI di reindirizzamento autorizzato** inserisci `https://IL-TUO-DOMINIO/api/drive/callback`.
-5. Imposta sul server `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` e `PUBLIC_URL=https://IL-TUO-DOMINIO`, poi riavvia.
-6. Nell'app: **Amministrazione → Archivio Google Drive → Collega il Google Drive dell'amministratore** e accedi con l'account del Capo.
+## Backup e ripristino
 
-### Ripristino automatico
-Se l'app gira su un servizio senza disco permanente, nella stessa scheda premi **Mostra il codice** e copialo nella variabile `GOOGLE_REFRESH_TOKEN`. A ogni avvio con database assente, l'app scarica l'ultima copia `ambulatorio.db` dal Drive. Gli allegati vengono riscaricati la prima volta che servono. Se il ripristino fallisce, la sincronizzazione si sospende per non sovrascrivere l'archivio sul Drive.
-
-> Privacy: si tratta di dati sanitari. È preferibile un account **Google Workspace** con accordo sul trattamento dei dati (DPA) anziché un Gmail personale, e la verifica degli adempimenti GDPR con il proprio responsabile.
+In **Amministrazione → Backup e invio email**:
+- **Scarica backup**: scarica un unico file `.zip` con l'intero archivio (database, allegati, logo). Conservalo in un luogo sicuro: contiene dati sanitari.
+- **Ripristina da backup**: sostituisce i dati attuali con quelli del backup (va confermato scrivendo RIPRISTINA). Prima di procedere il server salva una copia di sicurezza dello stato attuale in `data/backups/`. Al termine tutti gli utenti devono accedere di nuovo.
 
 ## Architettura
 
@@ -83,8 +79,8 @@ Scegli una delle due strade:
 1. **Reverse proxy** (consigliato: Caddy, nginx o una piattaforma come Render o Railway) che termina TLS. Imposta `TRUST_PROXY=true FORCE_HTTPS=true COOKIE_SECURE=true`. Con nginx disattiva il buffering su `/api/events` (l'header `X-Accel-Buffering: no` è già inviato).
 2. **Certificati diretti**: `TLS_CERT_FILE` e `TLS_KEY_FILE`.
 
-### Backup
-Basta copiare la cartella `data/` (database e allegati). Con il server in funzione usa `sqlite3 data/ambulatorio.db ".backup backup.db"`.
+### Backup manuale lato server
+In alternativa al pulsante nell'app, puoi copiare la cartella `data/`, che contiene database e allegati.
 
 ## Docker
 

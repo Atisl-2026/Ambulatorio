@@ -1,5 +1,4 @@
 import './tz.js';
-import './restore.js';
 import express from 'express';
 import helmet from 'helmet';
 import multer from 'multer';
@@ -15,7 +14,7 @@ import {
   HttpError, hashPassword, verifyPassword, checkPasswordStrength, loginBlocked, registerFailure, clearFailures, norm, str,
 } from './security.js';
 import { createSession, destroySession, sessionUser, requireAuth, requireAdmin, csrfGuard } from './auth.js';
-import { attachClient, broadcast, revokeUser, onlineCount, onSharedChange } from './realtime.js';
+import { attachClient, broadcast, revokeUser, revokeAll, onlineCount } from './realtime.js';
 import { logActivity } from './log.js';
 import {
   KINDS, REQUEST_STATUSES, kindDef, listVisible, serializeOne, createItem, saveDraft, discardDraft, publish, setLock,
@@ -23,11 +22,9 @@ import {
 } from './entities.js';
 import { aiConfigured, aiEnabled, summarizeRequest, askArchive, conflictReport, periodReport } from './ai.js';
 import { exportWeek, exportMonth } from './export.js';
-import { driveConfigured, SCOPES, oauthClient, exchangeCode, encrypt, revoke } from './drive.js';
-import {
-  driveStatus, runSync, scheduleSync, startDriveSync, ensureLocalFile, deleteRemote, refreshToken, resetDriveState,
-} from './driveSync.js';
-import { isISODate, mondayOf, addDays, weekKey } from '../shared/dates.js';
+import { createBackup, restoreBackup } from './backup.js';
+import { mailSettings, updateMailSettings, sendMonthlyCalendar, startMonthlyMailer, previousMonth } from './mailer.js';
+import { isISODate, mondayOf, addDays, weekKey, formatDateTime } from '../shared/dates.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DIST = path.join(ROOT, 'dist');
@@ -123,30 +120,6 @@ api.post('/auth/password', requireAuth, (req, res) => {
   res.json({ user: publicUser({ ...req.user, mustChangePassword: false }) });
 });
 
-// Ritorno da Google dopo l'autorizzazione del Drive. Il cookie di sessione (SameSite=Strict)
-// non arriva in questa navigazione: l'identità è garantita dal parametro "state" monouso.
-const driveStates = new Map();
-api.get('/drive/callback', async (req, res) => {
-  const st = driveStates.get(String(req.query.state || ''));
-  driveStates.delete(String(req.query.state || ''));
-  if (!st || st.expires < Date.now()) return res.redirect('/amministrazione?drive=errore');
-  if (req.query.error || !req.query.code) return res.redirect('/amministrazione?drive=annullato');
-  try {
-    const { refreshToken: token, email } = await exchangeCode(String(req.query.code));
-    if (!token) return res.redirect('/amministrazione?drive=errore');
-    setSetting('drive_token_enc', encrypt(token), st.userId);
-    setSetting('drive_account', email || '', st.userId);
-    setSetting('drive_connected_at', now(), st.userId);
-    req.user = { id: st.userId, displayName: st.displayName };
-    logActivity(req, 'impostazioni', `Collegato il Google Drive dell'amministratore${email ? ` (${email})` : ''}`);
-    runSync().catch(() => {});
-    res.redirect('/amministrazione?drive=ok');
-  } catch (err) {
-    console.error('[Drive] collegamento non riuscito:', err?.message);
-    res.redirect('/amministrazione?drive=errore');
-  }
-});
-
 api.use(requireAuth);
 
 // ================= Tempo reale =================
@@ -201,46 +174,6 @@ api.post('/settings/logo', requireAdmin, logoUpload.single('file'), (req, res) =
   logActivity(req, 'impostazioni', 'Logo aggiornato');
   broadcast({ type: 'logo:changed' });
   res.json({ ok: true });
-});
-
-// ================= Archivio Google Drive (solo Capo) =================
-
-api.get('/drive/status', requireAdmin, (req, res) => res.json(driveStatus()));
-
-api.post('/drive/connect', requireAdmin, (req, res) => {
-  if (!driveConfigured()) {
-    throw new HttpError(400, 'Collegamento non configurato sul server: servono GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET e PUBLIC_URL.');
-  }
-  const state = crypto.randomBytes(24).toString('base64url');
-  driveStates.set(state, { userId: req.user.id, displayName: req.user.displayName, expires: Date.now() + 10 * 60 * 1000 });
-  const url = oauthClient().generateAuthUrl({ access_type: 'offline', prompt: 'consent', scope: SCOPES, state, include_granted_scopes: true });
-  res.json({ url });
-});
-
-api.post('/drive/sync', requireAdmin, async (req, res) => {
-  if (!refreshToken()) throw new HttpError(400, 'Il Google Drive non è collegato.');
-  await runSync();
-  res.json(driveStatus());
-});
-
-api.post('/drive/disconnect', requireAdmin, async (req, res) => {
-  if (process.env.GOOGLE_REFRESH_TOKEN) {
-    throw new HttpError(400, 'Il collegamento è impostato nella variabile GOOGLE_REFRESH_TOKEN del server: rimuovila per scollegare.');
-  }
-  const token = refreshToken();
-  if (token) await revoke(token);
-  for (const k of ['drive_token_enc', 'drive_account', 'drive_connected_at']) run('DELETE FROM settings WHERE key = ?', k);
-  resetDriveState();
-  logActivity(req, 'impostazioni', 'Scollegato il Google Drive (i file già archiviati restano sul Drive)');
-  res.json(driveStatus());
-});
-
-// Valore da copiare nella variabile GOOGLE_REFRESH_TOKEN per il ripristino automatico.
-api.post('/drive/token', requireAdmin, (req, res) => {
-  const token = refreshToken();
-  if (!token) throw new HttpError(400, 'Il Google Drive non è collegato.');
-  logActivity(req, 'impostazioni', 'Visualizzato il codice di collegamento del Drive');
-  res.json({ token });
 });
 
 // ================= Utenti =================
@@ -548,11 +481,11 @@ function canReadFile(user, f) {
   return !!get("SELECT 1 AS x FROM drafts WHERE kind = 'request' AND user_id = ? AND data LIKE ?", user.id, pattern);
 }
 
-api.get('/files/:id', async (req, res) => {
+api.get('/files/:id', (req, res) => {
   const f = get('SELECT * FROM files WHERE id = ?', String(req.params.id));
   if (!f || !canReadFile(req.user, f)) throw new HttpError(404, 'File non trovato.');
-  const p = await ensureLocalFile(f).catch(() => null);
-  if (!p) throw new HttpError(404, 'File non trovato.');
+  const p = path.join(UPLOAD_DIR, f.stored_name);
+  if (!fs.existsSync(p)) throw new HttpError(404, 'File non trovato.');
   const inline = req.query.inline === '1' && /^(image\/(png|jpeg|gif|webp)|application\/pdf)$/.test(f.mime);
   res.set('Content-Type', f.mime);
   res.set('X-Content-Type-Options', 'nosniff');
@@ -568,7 +501,6 @@ function cleanupOrphanFiles() {
       || get("SELECT 1 AS x FROM drafts WHERE kind = 'request' AND data LIKE ?", pattern);
     if (!used) {
       run('DELETE FROM files WHERE id = ?', f.id);
-      deleteRemote(f.drive_id);
       fs.rmSync(path.join(UPLOAD_DIR, f.stored_name), { force: true });
     }
   }
@@ -632,6 +564,43 @@ async function sendXlsx(req, res, result) {
 api.get('/export/week', requireAdmin, async (req, res) => sendXlsx(req, res, await exportWeek(String(req.query.week || ''), req.user.displayName)));
 api.get('/export/month', requireAdmin, async (req, res) => sendXlsx(req, res, await exportMonth(String(req.query.month || ''), req.user.displayName)));
 
+// ================= Invio mensile per email (solo Capo) =================
+
+api.get('/mail/settings', requireAdmin, (req, res) => res.json(mailSettings()));
+api.put('/mail/settings', requireAdmin, (req, res) => res.json(updateMailSettings(req, { enabled: !!req.body?.enabled, recipients: req.body?.recipients })));
+api.post('/mail/send', requireAdmin, async (req, res) => {
+  const month = String(req.body?.month || '');
+  const r = await sendMonthlyCalendar(month, req, req.body?.recipients);
+  // Se è il mese appena concluso, l'invio automatico non lo ripete.
+  if (month === previousMonth() && !req.body?.recipients) {
+    setSetting('monthly_email_last_month', month, req.user.id);
+    setSetting('monthly_email_last_sent_at', now(), req.user.id);
+  }
+  res.json({ ...r, settings: mailSettings() });
+});
+
+// ================= Backup dell'archivio (solo Capo) =================
+
+api.get('/backup', requireAdmin, (req, res) => {
+  const { buffer, filename, manifest } = createBackup();
+  logActivity(req, 'backup', `Scaricato backup completo ${filename} (${manifest.counts.richieste} richieste, ${manifest.counts.appuntamenti} appuntamenti, ${manifest.counts.allegati} allegati)`);
+  res.set('Content-Type', 'application/zip');
+  res.set('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(buffer);
+});
+
+const backupUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: Number(process.env.MAX_BACKUP_MB || 500) * 1024 * 1024 } });
+api.post('/backup/restore', requireAdmin, backupUpload.single('file'), (req, res) => {
+  if (!req.file) throw new HttpError(400, 'Nessun file ricevuto.');
+  const who = { ...req.user };
+  const r = restoreBackup(req.file.buffer);
+  req.user = who;
+  logActivity(req, 'ripristino', `Archivio ripristinato dal backup del ${formatDateTime(r.manifest.createdAt)} (${r.files} allegati). Copia di sicurezza dello stato precedente: ${r.safety}`);
+  res.json({ ok: true, manifest: r.manifest });
+  // Tutti devono accedere di nuovo: utenti e sessioni sono quelli del backup.
+  setTimeout(() => { revokeAll(); broadcast({ type: 'logo:changed' }); }, 300);
+});
+
 // ================= Errori API =================
 
 api.use((req, _res, next) => next(new HttpError(404, 'Risorsa non trovata.')));
@@ -667,8 +636,7 @@ if (process.env.TLS_CERT_FILE && process.env.TLS_KEY_FILE) {
 } else {
   server = http.createServer(app);
 }
-onSharedChange(() => scheduleSync());
-startDriveSync();
+startMonthlyMailer();
 
 server.listen(PORT, () => {
   console.log(`Ambulatorio in ascolto su ${process.env.TLS_CERT_FILE ? 'https' : 'http'}://localhost:${PORT}`);

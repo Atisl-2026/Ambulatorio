@@ -8,31 +8,17 @@ import {
 
 const TABS = [
   ['users', 'Utenti'],
-  ['drive', 'Archivio Google Drive'],
   ['doctors', 'Medici'],
   ['ai', 'Intelligenza artificiale'],
   ['export', 'Esportazione Excel'],
+  ['backup', 'Backup e invio email'],
   ['log', 'Registro attività'],
   ['settings', 'Impostazioni'],
 ];
 
-const DRIVE_RESULT = {
-  ok: ['Google Drive collegato: l\'archivio viene copiato nel Drive dell\'amministratore.', 'success'],
-  annullato: ['Collegamento al Google Drive annullato.', 'info'],
-  errore: ['Collegamento al Google Drive non riuscito. Riprova.', 'error'],
-};
-
 export default function Admin() {
-  const { settings, toast } = useApp();
-  const [tab, setTab] = useState(() => (new URLSearchParams(window.location.search).has('drive') ? 'drive' : 'users'));
-  // Ritorno dalla pagina di autorizzazione di Google.
-  useEffect(() => {
-    const r = new URLSearchParams(window.location.search).get('drive');
-    if (!r) return;
-    const [msg, type] = DRIVE_RESULT[r] || DRIVE_RESULT.errore;
-    toast(msg, type);
-    window.history.replaceState({}, '', '/amministrazione');
-  }, [toast]);
+  const [tab, setTab] = useState('users');
+  const { settings } = useApp();
   return (
     <>
       <div className="page-head">
@@ -47,10 +33,10 @@ export default function Admin() {
         ))}
       </div>
       {tab === 'users' && <Users />}
-      {tab === 'drive' && <DrivePanel />}
       {tab === 'doctors' && <Doctors />}
       {tab === 'ai' && <AiPanel />}
       {tab === 'export' && <ExportPanel />}
+      {tab === 'backup' && <BackupPanel />}
       {tab === 'log' && <ActivityLog />}
       {tab === 'settings' && <SettingsPanel />}
     </>
@@ -488,6 +474,7 @@ const ACTION_LABELS = {
   eliminazione: 'Eliminazione', utente_creato: 'Utente creato', utente_modificato: 'Utente modificato',
   medico_creato: 'Medico creato', medico_modificato: 'Medico modificato', impostazioni: 'Impostazioni',
   esportazione: 'Esportazione', ia: 'Uso IA', allegato_caricato: 'Allegato caricato',
+  invio_email: 'Invio email', backup: 'Backup', ripristino: 'Ripristino',
 };
 
 function ActivityLog() {
@@ -596,103 +583,120 @@ function SettingsPanel() {
   );
 }
 
-// ================= Archivio Google Drive =================
+// ================= Backup e invio email =================
 
-function DrivePanel() {
+const monthLabel = (ym) => (ym ? `${MONTHS[Number(ym.slice(5)) - 1]} ${ym.slice(0, 4)}` : '');
+function lastMonthISO() {
+  const d = new Date();
+  const p = new Date(d.getFullYear(), d.getMonth() - 1, 15);
+  return `${p.getFullYear()}-${String(p.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function BackupPanel() {
   const { toast, confirm } = useApp();
-  const [st, setSt] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [token, setToken] = useState(null);
-  const load = useCallback(() => api.get('/drive/status').then(setSt).catch((e) => toast(e.message, 'error')), [toast]);
-  useEffect(() => {
-    load();
-    const t = setInterval(load, 15000);
-    return () => clearInterval(t);
-  }, [load]);
+  const [ms, setMs] = useState(null);
+  const [enabled, setEnabled] = useState(false);
+  const [recipients, setRecipients] = useState('');
+  const [sendMonth, setSendMonth] = useState(lastMonthISO());
+  const [busy, setBusy] = useState('');
 
-  const act = async (fn) => {
-    setBusy(true);
-    try { await fn(); } catch (err) { toast(err.message, 'error'); } finally { setBusy(false); }
+  const load = useCallback(async () => {
+    try {
+      const s = await api.get('/mail/settings');
+      setMs(s);
+      setEnabled(s.enabled);
+      setRecipients(s.recipients);
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }, [toast]);
+  useEffect(() => { load(); }, [load]);
+
+  const act = async (key, fn) => {
+    setBusy(key);
+    try { await fn(); } catch (err) { toast(err.message, 'error'); } finally { setBusy(''); }
   };
-  const connect = () => act(async () => {
-    const { url } = await api.post('/drive/connect');
-    window.location.href = url;
+  const save = () => act('save', async () => {
+    const s = await api.put('/mail/settings', { enabled, recipients });
+    setMs(s);
+    toast(s.enabled ? 'Invio mensile attivato.' : 'Impostazioni salvate.', 'success');
   });
-  const syncNow = () => act(async () => {
-    const s = await api.post('/drive/sync');
-    setSt(s);
-    toast(s.lastError ? s.lastError : 'Archivio sincronizzato sul Drive.', s.lastError ? 'error' : 'success');
+  const sendNow = () => act('send', async () => {
+    const r = await api.post('/mail/send', { month: sendMonth });
+    setMs(r.settings);
+    toast(`Inviato ${r.filename} a ${r.to.join(', ')}.`, 'success');
   });
-  const disconnect = async () => {
+  const download = () => act('backup', async () => {
+    const name = await api.download('/backup');
+    toast(`Scaricato ${name}. Conservalo in un posto sicuro.`, 'success');
+  });
+  const restore = async (file) => {
+    if (!file) return;
     const ok = await confirm({
-      title: 'Scollegare il Google Drive?',
-      message: 'L\'app smetterà di copiare l\'archivio sul Drive. I file già presenti nel Drive restano dove sono.',
-      confirmLabel: 'Scollega', danger: true,
+      title: 'Ripristinare l\'archivio da questo backup?',
+      message: `File: ${file.name}\n\nTutti i dati attuali (richieste, appuntamenti, utenti, allegati, registro) verranno SOSTITUITI con quelli del backup. Prima del ripristino il server salva automaticamente una copia di sicurezza dello stato attuale.\n\nAl termine tutti gli utenti dovranno accedere di nuovo.`,
+      confirmLabel: 'Ripristina',
+      danger: true,
+      requireText: 'RIPRISTINA',
     });
-    if (ok) act(async () => { setSt(await api.post('/drive/disconnect')); setToken(null); toast('Drive scollegato.'); });
+    if (!ok) return;
+    act('restore', async () => {
+      await api.upload('/backup/restore', file);
+      toast('Archivio ripristinato. Accedi di nuovo.', 'success');
+    });
   };
-  const showToken = () => act(async () => setToken((await api.post('/drive/token')).token));
 
-  if (!st) return <Spinner />;
+  if (!ms) return <Spinner />;
   return (
     <div className="stack">
       <div className="card card-pad">
-        <h3>Archivio nel Google Drive dell'amministratore</h3>
+        <h3>Invio automatico mensile del calendario</h3>
         <p className="small muted">
-          Tutto l'archivio viene copiato automaticamente in una cartella del tuo Google Drive, <b>{st.folderName}</b>, pochi secondi dopo ogni modifica:
-          calendari settimanali e mensili in Excel, registro delle richieste, allegati dei documenti pubblicati e copia completa del database
-          (una aggiornata di continuo più una al giorno per 30 giorni). Le bozze non pubblicate non vengono copiate.
-          L'app può vedere solo i file che crea lei, non il resto del tuo Drive.
+          Il giorno 1 di ogni mese, dalle ore {ms.sendHour}:00, l'app invia per email il calendario Excel del mese appena concluso
+          (es. <b>Ambulatorio_{monthLabel(lastMonthISO()).replace(' ', '_')}.xlsx</b>) agli indirizzi indicati.
+          L'email parte dalla casella di posta dell'ufficio{ms.from ? <> (<b>{ms.from}</b>)</> : null}. Se quel giorno il server è spento, l'invio avviene appena riparte.
         </p>
-        {!st.configured && !st.connected && (
+        {!ms.configured && (
           <div className="info-banner">
-            Prima di collegare il Drive bisogna configurare sul server <code>GOOGLE_CLIENT_ID</code>, <code>GOOGLE_CLIENT_SECRET</code> e <code>PUBLIC_URL</code> (vedi README, sezione "Archivio su Google Drive").
-            URI di reindirizzamento da autorizzare su Google: <code>{st.redirectUri}</code>
+            Invio email non ancora configurato sul server: servono i dati della casella di posta dell'ufficio (SMTP_HOST, SMTP_USER, SMTP_PASS — vedi README).
           </div>
         )}
-        {st.restore && (
-          <div className={st.restore.failed ? 'lock-banner' : 'info-banner'} style={{ display: 'block' }}>{st.restore.message}</div>
-        )}
-        {st.connected ? (
-          <>
-            <div className="row" style={{ marginBottom: 10 }}>
-              <span className="badge badge-ok">Collegato</span>
-              {st.account && <span>Account: <b>{st.account}</b></span>}
-              {st.connectedAt && <span className="small muted">dal {formatDateTime(st.connectedAt)}</span>}
-              {st.fromEnv && <span className="small muted">(impostato dal server)</span>}
-            </div>
-            <ul className="small" style={{ paddingLeft: 18 }}>
-              <li>Ultima sincronizzazione: <b>{st.running ? 'in corso…' : (st.lastSync ? formatDateTime(st.lastSync) : 'non ancora eseguita')}</b></li>
-              <li>Calendari settimanali: {st.counts.weeks} · mensili: {st.counts.months} · registro richieste: {st.counts.requests ? 'sì' : 'no'}</li>
-              <li>Allegati archiviati: {st.counts.attachments} · copie giornaliere del database: {st.counts.dailyBackups}{st.dbAt ? ` (ultima ${formatDateTime(st.dbAt)})` : ''}</li>
-            </ul>
-            {st.lastError && <div className="error-box">{st.lastError}</div>}
-            <div className="row">
-              {st.folderUrl && <a className="btn btn-secondary" href={st.folderUrl} target="_blank" rel="noreferrer">Apri la cartella nel Drive</a>}
-              <button type="button" className="btn btn-primary" onClick={syncNow} disabled={busy}>{busy ? 'Sincronizzazione…' : 'Sincronizza ora'}</button>
-              {!st.fromEnv && <button type="button" className="btn btn-ghost" onClick={disconnect} disabled={busy}>Scollega</button>}
-            </div>
-          </>
-        ) : (
-          <button type="button" className="btn btn-primary btn-lg" onClick={connect} disabled={busy || !st.configured}>
-            Collega il Google Drive dell'amministratore
-          </button>
-        )}
-      </div>
-      {st.connected && !st.fromEnv && (
-        <div className="card card-pad">
-          <h3>Ripristino automatico (consigliato)</h3>
-          <p className="small muted">
-            Se l'app gira su un servizio senza disco permanente, a ogni riavvio può ripartire dall'ultima copia sul Drive.
-            Per attivarlo, copia questo codice nella variabile <code>GOOGLE_REFRESH_TOKEN</code> del server. È una chiave di accesso: non condividerla.
-          </p>
-          {token ? (
-            <textarea className="input" readOnly rows={3} value={token} onFocus={(e) => e.target.select()} style={{ fontFamily: 'monospace' }} />
-          ) : (
-            <button type="button" className="btn" onClick={showToken} disabled={busy}>Mostra il codice</button>
-          )}
+        <div className="field">
+          <label htmlFor="m-to">Indirizzo email di destinazione</label>
+          <input id="m-to" className="input" type="text" inputMode="email" value={recipients} onChange={(e) => setRecipients(e.target.value)} placeholder="es. direzione@esempio.it (più indirizzi separati da virgola)" />
         </div>
-      )}
+        <div className="row" style={{ marginBottom: 12 }}>
+          <Switch checked={enabled} onChange={setEnabled} label={enabled ? 'Invio mensile attivo' : 'Invio mensile disattivato'} />
+        </div>
+        <button type="button" className="btn btn-primary" onClick={save} disabled={!!busy}>Salva impostazioni</button>
+        <ul className="small" style={{ paddingLeft: 18, marginTop: 14 }}>
+          <li>Ultimo mese inviato: <b>{ms.lastSentAt ? `${monthLabel(ms.lastMonth)} (il ${formatDateTime(ms.lastSentAt)})` : 'nessuno'}</b></li>
+          {ms.enabled && <li>Prossimo invio: <b>1° del mese</b>, con il calendario di <b>{monthLabel(ms.nextMonth)}</b></li>}
+        </ul>
+        {ms.lastError && <div className="error-box">{ms.lastError}</div>}
+        <div className="row" style={{ borderTop: '1px solid var(--border)', paddingTop: 12, marginTop: 4 }}>
+          <span className="small"><b>Invia adesso</b> il calendario di</span>
+          <MonthPicker value={sendMonth} onChange={setSendMonth} />
+          <button type="button" className="btn btn-secondary" onClick={sendNow} disabled={!!busy || !ms.configured || !ms.recipients}>
+            {busy === 'send' ? 'Invio in corso…' : 'Invia ora'}
+          </button>
+        </div>
+      </div>
+
+      <div className="card card-pad">
+        <h3>Backup completo dell'archivio</h3>
+        <p className="small muted">
+          Un unico file .zip con tutto: database (richieste, appuntamenti, cronologia, utenti, registro attività), allegati e logo.
+          Scaricalo periodicamente e conservalo in un luogo sicuro (es. chiavetta o PC dell'ufficio): contiene dati sanitari.
+        </p>
+        <div className="row">
+          <button type="button" className="btn btn-secondary" onClick={download} disabled={!!busy}>
+            <Icon name="download" /> {busy === 'backup' ? 'Preparazione…' : 'Scarica backup'}
+          </button>
+          <input type="file" id="restore-file" className="sr-only" accept=".zip,application/zip" onChange={(e) => { restore(e.target.files[0]); e.target.value = ''; }} />
+          <label htmlFor="restore-file" className="btn">{busy === 'restore' ? 'Ripristino in corso…' : 'Ripristina da backup…'}</label>
+        </div>
+      </div>
     </div>
   );
 }

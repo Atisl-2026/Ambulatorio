@@ -5,7 +5,7 @@ import { Icon, Modal, StateBadges, LockBadge, Spinner } from '../components/ui.j
 import { useDraftEditor, toForm } from '../components/useDraftEditor.js';
 import { EditorStatus, EditorFooter } from '../components/EditorParts.jsx';
 import {
-  addDays, mondayOf, todayISO, weekDays, weekLabel, weekKey, DAYS_LONG, formatDate, weekdayIndex, formatDateTime,
+  addDays, mondayOf, todayISO, weekDays, weekLabel, weekKey, DAYS_LONG, formatDate, weekdayIndex, formatDateTime, MONTHS,
 } from '../../shared/dates.js';
 
 function initialMonday() {
@@ -116,6 +116,24 @@ export default function Ambulatorio() {
     }
   };
 
+  // Mese "principale" della settimana (quello del giovedì).
+  const weekMonth = addDays(monday, 3).slice(0, 7);
+  const sendMonthEmail = async () => {
+    const [y, m] = weekMonth.split('-').map(Number);
+    const ok = await confirm({
+      title: 'Inviare il calendario per email?',
+      message: `Verrà inviato il calendario Excel di ${MONTHS[m - 1]} ${y} all'indirizzo impostato in Amministrazione → Backup e invio email.`,
+      confirmLabel: 'Invia',
+    });
+    if (!ok) return;
+    try {
+      const r = await api.post('/mail/send', { month: weekMonth });
+      toast(`Inviato ${r.filename} a ${r.to.join(', ')}.`, 'success');
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  };
+
   const openNew = (day) => {
     if (!canCreate) return;
     setEditing({ item: null, day: day || (days.includes(today) ? today : monday) });
@@ -136,6 +154,7 @@ export default function Ambulatorio() {
             <button type="button" className="btn btn-secondary" onClick={exportWeek}>
               <Icon name="download" /> Excel settimana
             </button>
+            <button type="button" className="btn" onClick={sendMonthEmail}>Invia mese per email</button>
           </>
         )}
         <button type="button" className="btn btn-primary" onClick={() => openNew()} disabled={!canCreate}>
