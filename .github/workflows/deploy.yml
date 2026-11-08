@@ -63,10 +63,10 @@ jobs:
         run: npx supabase link --project-ref "$PROJECT_REF"
 
       - name: Aggiorna il database
-        run: npx supabase db push --include-all
+        run: npx supabase db push --remote --include-all --password "$SUPABASE_DB_PASSWORD"
 
       - name: Pubblica le funzioni cloud
-        run: npx supabase functions deploy --project-ref "$PROJECT_REF"
+        run: npx supabase functions deploy --use-api
 
       - name: Segreti delle funzioni (email e IA)
         env:
@@ -81,7 +81,7 @@ jobs:
           for v in SMTP_HOST SMTP_PORT SMTP_USER SMTP_PASS MAIL_FROM ANTHROPIC_API_KEY; do
             [ -n "${!v}" ] && printf '%s=%s\n' "$v" "${!v}" >> segreti.env
           done
-          if [ -s segreti.env ]; then npx supabase secrets set --env-file segreti.env --project-ref "$PROJECT_REF"; else echo "Nessun segreto facoltativo impostato."; fi
+          if [ -s segreti.env ]; then npx supabase secrets set --env-file segreti.env; else echo "Nessun segreto facoltativo impostato."; fi
           rm -f segreti.env
 
       - name: Impostazioni di accesso (niente registrazioni libere, password lunghe)
