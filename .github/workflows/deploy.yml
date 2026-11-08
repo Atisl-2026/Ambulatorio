@@ -62,8 +62,30 @@ jobs:
       - name: Collega il progetto Supabase
         run: npx supabase link --project-ref "$PROJECT_REF"
 
+      # I server di GitHub non hanno IPv6: ci si collega al database tramite il pooler di Supabase (IPv4).
+      - name: Connessione al database
+        run: |
+          API="https://api.supabase.com/v1/projects/$PROJECT_REF"
+          AUTH="Authorization: Bearer $SUPABASE_ACCESS_TOKEN"
+          REGION=$(curl -sf "$API" -H "$AUTH" | jq -r '.region // empty' || true)
+          POOLER=$(curl -sf "$API/config/database/pooler" -H "$AUTH" | jq -r '[.[] | select(.database_type == "PRIMARY")][0].db_host // empty' 2>/dev/null || true)
+          PASS=$(python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["SUPABASE_DB_PASSWORD"], safe=""))')
+          echo "Regione del progetto: ${REGION:-sconosciuta}"
+          for H in $POOLER ${REGION:+aws-1-$REGION.pooler.supabase.com aws-0-$REGION.pooler.supabase.com}; do
+            URL="postgresql://postgres.$PROJECT_REF:$PASS@$H:5432/postgres"
+            if psql "$URL" -tAc "select 1" >/dev/null 2>err.txt; then
+              echo "::add-mask::$URL"
+              echo "DB_URL=$URL" >> "$GITHUB_ENV"
+              echo "Collegato tramite $H"
+              exit 0
+            fi
+            echo "Tentativo su $H non riuscito: $(grep -o 'FATAL.*\|password authentication failed.*\|Tenant or user not found' err.txt | head -1)"
+          done
+          echo "::error::Impossibile collegarsi al database. Controlla il segreto SUPABASE_DB_PASSWORD (deve essere la password del database del progetto)."
+          exit 1
+
       - name: Aggiorna il database
-        run: npx supabase db push --remote --include-all --password "$SUPABASE_DB_PASSWORD"
+        run: npx supabase db push --db-url "$DB_URL" --include-all
 
       - name: Pubblica le funzioni cloud
         run: npx supabase functions deploy --use-api
