@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 160" role="img" aria-label="èpaca Coldiretti – Apulia Diagnostic">
+  <rect width="520" height="160" rx="14" fill="#ffffff"/>
+  <rect x="14" y="14" width="132" height="132" rx="12" fill="#FFED00"/>
+  <text x="80" y="96" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="46" font-weight="700" fill="#2b2b2b">èp</text>
+  <text x="166" y="66" font-family="Arial, Helvetica, sans-serif" font-size="40" font-weight="700" fill="#2b2b2b">èpaca <tspan fill="#6B7A3A">Coldiretti</tspan></text>
+  <text x="168" y="96" font-family="Arial, Helvetica, sans-serif" font-size="18" font-style="italic" fill="#555">Aggiungiamo valore al valore</text>
+  <text x="168" y="132" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700" fill="#6B7A3A">Apulia Diagnostic</text>
+</svg>
