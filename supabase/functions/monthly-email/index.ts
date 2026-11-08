@@ -74,7 +74,7 @@ async function send(db: Db, ym: string, who: { id: string | null; display_name: 
       from: from(),
       to: to.join(', '),
       subject: `Calendario ambulatorio – ${info.label}`,
-      text: `Buongiorno,\n\nin allegato il calendario dell'ambulatorio di ${info.label} (${rows.length} appuntamenti) in formato Excel.\n\nMessaggio inviato ${who ? `da ${who.display_name}` : 'automaticamente'} dall'app Ambulatorio – èpaca Coldiretti / Apulia Diagnostic.\nIl file contiene dati personali di clienti: non inoltrarlo a persone non autorizzate.`,
+      text: `Buongiorno,\n\nin allegato il calendario dell'ambulatorio di ${info.label} (${rows.length} appuntamenti) in formato Excel.\n\nMessaggio inviato ${who ? `da ${who.display_name}` : 'automaticamente'} dall'app Ambulatorio – èpaca Coldiretti.\nIl file contiene dati personali di clienti: non inoltrarlo a persone non autorizzate.`,
       attachments: [{ filename: info.fileName, content: xlsx, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }],
     });
   } catch (err) {

@@ -14,4 +14,3 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
 });
 
 export const usernameToEmail = (u) => `${String(u || '').trim().toLowerCase()}@${USER_EMAIL_DOMAIN}`;
-export const logoUrl = (v = 0) => `${SUPABASE_URL}/storage/v1/object/public/branding/logo?v=${v}`;

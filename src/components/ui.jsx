@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { logoUrl } from '../supabase.js';
 
-const PLACEHOLDER = `${import.meta.env.BASE_URL}logo-placeholder.svg`;
+const LOGO = `${import.meta.env.BASE_URL}logo.png`;
 
 // ---------- Icone (SVG inline) ----------
 const paths = {
@@ -30,18 +29,9 @@ export function Icon({ name, size = 18, title }) {
   );
 }
 
-// Logo caricato dal Capo (Storage pubblico); se non c'è, segnaposto incluso nell'app.
-export function Logo({ className = 'header-logo', version = 0 }) {
-  const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [version]);
-  return (
-    <img
-      className={className}
-      src={failed ? PLACEHOLDER : logoUrl(version)}
-      onError={() => setFailed(true)}
-      alt="èpaca Coldiretti – Aggiungiamo valore al valore · Apulia Diagnostic"
-    />
-  );
+// Logo ufficiale incluso nell'app.
+export function Logo({ className = 'header-logo' }) {
+  return <img className={className} src={LOGO} alt="èpaca Coldiretti – Aggiungiamo valore al valore" />;
 }
 
 // ---------- Badge ----------
@@ -69,8 +59,12 @@ export function StateBadges({ item }) {
 // ---------- Modale ----------
 export function Modal({ title, onClose, children, footer, size = '', labelledBy, badge }) {
   const ref = useRef(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  // Solo all'apertura: rieseguire questo effetto a ogni digitazione spostava il focus
+  // dal campo di testo alla finestra e sui telefoni faceva chiudere la tastiera.
   useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose?.(); };
+    const onKey = (e) => { if (e.key === 'Escape') closeRef.current?.(); };
     document.addEventListener('keydown', onKey);
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
@@ -79,9 +73,9 @@ export function Modal({ title, onClose, children, footer, size = '', labelledBy,
       document.removeEventListener('keydown', onKey);
       document.body.style.overflow = prev;
     };
-  }, [onClose]);
+  }, []);
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose?.(); }}>
+    <div className="modal-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) closeRef.current?.(); }}>
       <div className={`modal ${size}`} role="dialog" aria-modal="true" aria-label={labelledBy || title} tabIndex={-1} ref={ref}>
         {title && (
           <div className="modal-head">

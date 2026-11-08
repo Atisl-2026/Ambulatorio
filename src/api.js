@@ -272,7 +272,6 @@ export const api = {
   upload: (url, file) => {
     if (url === '/files') return uploadFile(file);
     if (url === '/backup/restore') return restoreBackup(file);
-    if (url === '/settings/logo') return uploadLogo(file);
     throw new ApiError(404, 'Operazione non disponibile.');
   },
   download: async (url) => {
@@ -294,14 +293,5 @@ export const api = {
     throw new ApiError(404, 'Operazione non disponibile.');
   },
 };
-
-async function uploadLogo(file) {
-  const ok = ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'].includes(file.type);
-  if (!ok || file.size > 3 * 1024 * 1024) throw new ApiError(400, 'Carica un\'immagine PNG, JPG, WEBP o SVG (max 3 MB).');
-  const { error } = await supabase.storage.from('branding').upload('logo', file, { upsert: true, contentType: file.type, cacheControl: '60' });
-  if (error) throw new ApiError(400, `Caricamento non riuscito: ${error.message}`);
-  await logEvent('logo', 'Logo aggiornato');
-  return { ok: true };
-}
 
 export const basePath = (kind) => (kind === 'request' ? '/requests' : '/appointments');

@@ -13,10 +13,10 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['logo-placeholder.svg', 'icons/apple-touch-icon.png'],
+      includeAssets: ['logo.png', 'icons/apple-touch-icon.png'],
       manifest: {
         id: './',
-        name: 'Ambulatorio · èpaca Coldiretti – Apulia Diagnostic',
+        name: 'Ambulatorio · èpaca Coldiretti',
         short_name: 'Ambulatorio',
         description: 'Richieste, documenti e appuntamenti ambulatoriali',
         lang: 'it',

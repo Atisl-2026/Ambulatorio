@@ -547,30 +547,15 @@ function ActivityLog() {
 // ================= Impostazioni =================
 
 function SettingsPanel() {
-  const { toast, logoVersion, settings } = useApp();
-  const [busy, setBusy] = useState(false);
-  const upload = async (file) => {
-    if (!file) return;
-    setBusy(true);
-    try {
-      await api.upload('/settings/logo', file);
-      toast('Logo aggiornato per tutti gli utenti.', 'success');
-    } catch (err) {
-      toast(err.message, 'error');
-    } finally {
-      setBusy(false);
-    }
-  };
+  const { settings } = useApp();
   return (
     <div className="admin-grid">
       <div className="card card-pad">
         <h3>Logo</h3>
         <p className="small muted">Il logo compare nella pagina di benvenuto, nel login e nell'intestazione di ogni pagina.</p>
-        <div style={{ background: '#fff', border: '1px solid var(--border)', borderRadius: 8, padding: 12, marginBottom: 12 }}>
-          <Logo className="welcome-logo" version={logoVersion} />
+        <div style={{ background: '#fff', border: '1px solid var(--border)', borderRadius: 8, padding: 12 }}>
+          <Logo className="welcome-logo" />
         </div>
-        <input type="file" id="logo-file" className="sr-only" accept="image/png,image/jpeg,image/webp,image/svg+xml" onChange={(e) => upload(e.target.files[0])} />
-        <label htmlFor="logo-file" className="btn btn-secondary">{busy ? 'Caricamento…' : 'Carica nuovo logo'}</label>
       </div>
       <div className="card card-pad">
         <h3>Stato del sistema</h3>

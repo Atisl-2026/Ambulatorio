@@ -1,4 +1,4 @@
-# Ambulatorio · èpaca Coldiretti – Apulia Diagnostic
+# Ambulatorio · èpaca Coldiretti
 
 App per gestire richieste, documenti e appuntamenti ambulatoriali, da telefono (Android e iPhone), tablet e computer, con sincronizzazione in tempo reale tra tutti gli utenti.
 
@@ -34,7 +34,7 @@ Indirizzo dell'app: **https://atisl-2026.github.io/Ambulatorio/**
 1. Scheda **Actions** → **Pubblica l'app** → **Run workflow**. In circa 3 minuti crea il database, le funzioni cloud e il sito.
 2. Scheda **Actions** → **App Android (APK)** → **Run workflow**: crea il file APK.
 3. Apri **https://atisl-2026.github.io/Ambulatorio/** e premi **Entra**: alla prima apertura l'app chiede di **creare l'account del Capo**. Fallo subito, perché il primo account creato diventa amministratore.
-4. Dal Capo: *Amministrazione → Utenti* per creare gli operatori, *Medici* per l'elenco dei medici, *Impostazioni* per caricare il logo.
+4. Dal Capo: *Amministrazione → Utenti* per creare gli operatori, *Medici* per l'elenco dei medici, *Impostazioni* per lo stato del sistema.
 
 Ogni modifica successiva al codice viene ripubblicata automaticamente.
 
