@@ -35,6 +35,34 @@ Il logo si carica da **Amministrazione → Impostazioni → Carica nuovo logo** 
 
 **Intelligenza artificiale (Anthropic Claude).** Con l'IA attiva il Capo può riassumere una richiesta e i suoi allegati (PDF, immagini, testo), fare domande in linguaggio naturale sull'archivio, cercare conflitti tra appuntamenti (stesso medico, stesso orario) e generare il riepilogo della settimana o del mese. Con l'IA disattivata le funzioni spariscono dall'interfaccia e il server rifiuta ogni chiamata: nessun dato esce. Per usarla serve la variabile `ANTHROPIC_API_KEY` sul server.
 
+## Archivio su Google Drive dell'amministratore
+
+L'archivio viene copiato automaticamente nel Google Drive del Capo, nella cartella **Ambulatorio – Archivio**, pochi secondi dopo ogni modifica e comunque ogni 10 minuti:
+
+```
+Ambulatorio – Archivio/
+  Database (backup)/      ambulatorio.db (sempre aggiornato) + ambulatorio_AAAA-MM-GG.db (una al giorno, 30 giorni)
+  Allegati/               "Richiesta 12 - referto.pdf" … (solo richieste pubblicate)
+  Calendari settimanali/  Ambulatorio_Settimana_2026-W45.xlsx …
+  Calendari mensili/      Ambulatorio_Novembre_2026.xlsx …
+  Richieste/              Registro_richieste.xlsx
+```
+
+Un file viene ricaricato solo se è cambiato. Il file si aggiorna dove si trova, senza creare doppioni, e un calendario eliminato dall'app sparisce anche dal Drive. Le bozze non pubblicate non vengono mai copiate. L'app usa il permesso `drive.file`, quindi vede soltanto i file che crea lei e non il resto del Drive.
+
+### Configurazione (una sola volta, circa 10 minuti)
+1. Vai su [console.cloud.google.com](https://console.cloud.google.com) con l'account Google del Capo e crea un progetto (es. "Ambulatorio").
+2. **API e servizi → Libreria**: abilita **Google Drive API**.
+3. **API e servizi → Schermata di consenso OAuth**: tipo *Esterno* (o *Interno* con Google Workspace). Inserisci nome app ed email, poi tra gli *Utenti di test* aggiungi l'email del Capo. Pubblica l'app ("In produzione"): in modalità *Test* l'autorizzazione scade dopo 7 giorni.
+4. **API e servizi → Credenziali → Crea credenziali → ID client OAuth**, tipo *Applicazione web*. Come **URI di reindirizzamento autorizzato** inserisci `https://IL-TUO-DOMINIO/api/drive/callback`.
+5. Imposta sul server `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` e `PUBLIC_URL=https://IL-TUO-DOMINIO`, poi riavvia.
+6. Nell'app: **Amministrazione → Archivio Google Drive → Collega il Google Drive dell'amministratore** e accedi con l'account del Capo.
+
+### Ripristino automatico
+Se l'app gira su un servizio senza disco permanente, nella stessa scheda premi **Mostra il codice** e copialo nella variabile `GOOGLE_REFRESH_TOKEN`. A ogni avvio con database assente, l'app scarica l'ultima copia `ambulatorio.db` dal Drive. Gli allegati vengono riscaricati la prima volta che servono. Se il ripristino fallisce, la sincronizzazione si sospende per non sovrascrivere l'archivio sul Drive.
+
+> Privacy: si tratta di dati sanitari. È preferibile un account **Google Workspace** con accordo sul trattamento dei dati (DPA) anziché un Gmail personale, e la verifica degli adempimenti GDPR con il proprio responsabile.
+
 ## Architettura
 
 - **Server**: Node.js con Express. Database SQLite persistente (`data/ambulatorio.db`, modalità WAL), allegati in `data/uploads/`.

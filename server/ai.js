@@ -1,11 +1,11 @@
 // Assistente IA per il Capo. Nessun dato viene inviato se l'IA è disattivata:
 // ogni rotta passa da requireAiEnabled() prima di costruire qualsiasi richiesta.
 import fs from 'node:fs';
-import path from 'node:path';
 import Anthropic from '@anthropic-ai/sdk';
-import { all, get, getSetting, UPLOAD_DIR } from './db.js';
+import { all, get, getSetting } from './db.js';
 import { HttpError } from './security.js';
 import { makeContext, rowData, withNames } from './entities.js';
+import { ensureLocalFile } from './driveSync.js';
 import { formatDate, mondayOf, addDays, monthRange, MONTHS, weekLabel } from '../shared/dates.js';
 
 const MODEL = process.env.AI_MODEL || 'claude-opus-5-5';
@@ -98,8 +98,8 @@ export async function summarizeRequest(id) {
   for (const fid of JSON.parse(r.attachments || '[]')) {
     const f = get('SELECT * FROM files WHERE id = ?', fid);
     if (!f) continue;
-    const p = path.join(UPLOAD_DIR, f.stored_name);
-    if (!fs.existsSync(p) || f.size > budget) {
+    const p = await ensureLocalFile(f).catch(() => null);
+    if (!p || f.size > budget) {
       skipped.push(f.original_name);
       continue;
     }

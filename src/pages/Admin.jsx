@@ -8,6 +8,7 @@ import {
 
 const TABS = [
   ['users', 'Utenti'],
+  ['drive', 'Archivio Google Drive'],
   ['doctors', 'Medici'],
   ['ai', 'Intelligenza artificiale'],
   ['export', 'Esportazione Excel'],
@@ -15,9 +16,23 @@ const TABS = [
   ['settings', 'Impostazioni'],
 ];
 
+const DRIVE_RESULT = {
+  ok: ['Google Drive collegato: l\'archivio viene copiato nel Drive dell\'amministratore.', 'success'],
+  annullato: ['Collegamento al Google Drive annullato.', 'info'],
+  errore: ['Collegamento al Google Drive non riuscito. Riprova.', 'error'],
+};
+
 export default function Admin() {
-  const [tab, setTab] = useState('users');
-  const { settings } = useApp();
+  const { settings, toast } = useApp();
+  const [tab, setTab] = useState(() => (new URLSearchParams(window.location.search).has('drive') ? 'drive' : 'users'));
+  // Ritorno dalla pagina di autorizzazione di Google.
+  useEffect(() => {
+    const r = new URLSearchParams(window.location.search).get('drive');
+    if (!r) return;
+    const [msg, type] = DRIVE_RESULT[r] || DRIVE_RESULT.errore;
+    toast(msg, type);
+    window.history.replaceState({}, '', '/amministrazione');
+  }, [toast]);
   return (
     <>
       <div className="page-head">
@@ -32,6 +47,7 @@ export default function Admin() {
         ))}
       </div>
       {tab === 'users' && <Users />}
+      {tab === 'drive' && <DrivePanel />}
       {tab === 'doctors' && <Doctors />}
       {tab === 'ai' && <AiPanel />}
       {tab === 'export' && <ExportPanel />}
@@ -576,6 +592,107 @@ function SettingsPanel() {
           <li>Permessi verificati dal server su ogni operazione.</li>
         </ul>
       </div>
+    </div>
+  );
+}
+
+// ================= Archivio Google Drive =================
+
+function DrivePanel() {
+  const { toast, confirm } = useApp();
+  const [st, setSt] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [token, setToken] = useState(null);
+  const load = useCallback(() => api.get('/drive/status').then(setSt).catch((e) => toast(e.message, 'error')), [toast]);
+  useEffect(() => {
+    load();
+    const t = setInterval(load, 15000);
+    return () => clearInterval(t);
+  }, [load]);
+
+  const act = async (fn) => {
+    setBusy(true);
+    try { await fn(); } catch (err) { toast(err.message, 'error'); } finally { setBusy(false); }
+  };
+  const connect = () => act(async () => {
+    const { url } = await api.post('/drive/connect');
+    window.location.href = url;
+  });
+  const syncNow = () => act(async () => {
+    const s = await api.post('/drive/sync');
+    setSt(s);
+    toast(s.lastError ? s.lastError : 'Archivio sincronizzato sul Drive.', s.lastError ? 'error' : 'success');
+  });
+  const disconnect = async () => {
+    const ok = await confirm({
+      title: 'Scollegare il Google Drive?',
+      message: 'L\'app smetterà di copiare l\'archivio sul Drive. I file già presenti nel Drive restano dove sono.',
+      confirmLabel: 'Scollega', danger: true,
+    });
+    if (ok) act(async () => { setSt(await api.post('/drive/disconnect')); setToken(null); toast('Drive scollegato.'); });
+  };
+  const showToken = () => act(async () => setToken((await api.post('/drive/token')).token));
+
+  if (!st) return <Spinner />;
+  return (
+    <div className="stack">
+      <div className="card card-pad">
+        <h3>Archivio nel Google Drive dell'amministratore</h3>
+        <p className="small muted">
+          Tutto l'archivio viene copiato automaticamente in una cartella del tuo Google Drive, <b>{st.folderName}</b>, pochi secondi dopo ogni modifica:
+          calendari settimanali e mensili in Excel, registro delle richieste, allegati dei documenti pubblicati e copia completa del database
+          (una aggiornata di continuo più una al giorno per 30 giorni). Le bozze non pubblicate non vengono copiate.
+          L'app può vedere solo i file che crea lei, non il resto del tuo Drive.
+        </p>
+        {!st.configured && !st.connected && (
+          <div className="info-banner">
+            Prima di collegare il Drive bisogna configurare sul server <code>GOOGLE_CLIENT_ID</code>, <code>GOOGLE_CLIENT_SECRET</code> e <code>PUBLIC_URL</code> (vedi README, sezione "Archivio su Google Drive").
+            URI di reindirizzamento da autorizzare su Google: <code>{st.redirectUri}</code>
+          </div>
+        )}
+        {st.restore && (
+          <div className={st.restore.failed ? 'lock-banner' : 'info-banner'} style={{ display: 'block' }}>{st.restore.message}</div>
+        )}
+        {st.connected ? (
+          <>
+            <div className="row" style={{ marginBottom: 10 }}>
+              <span className="badge badge-ok">Collegato</span>
+              {st.account && <span>Account: <b>{st.account}</b></span>}
+              {st.connectedAt && <span className="small muted">dal {formatDateTime(st.connectedAt)}</span>}
+              {st.fromEnv && <span className="small muted">(impostato dal server)</span>}
+            </div>
+            <ul className="small" style={{ paddingLeft: 18 }}>
+              <li>Ultima sincronizzazione: <b>{st.running ? 'in corso…' : (st.lastSync ? formatDateTime(st.lastSync) : 'non ancora eseguita')}</b></li>
+              <li>Calendari settimanali: {st.counts.weeks} · mensili: {st.counts.months} · registro richieste: {st.counts.requests ? 'sì' : 'no'}</li>
+              <li>Allegati archiviati: {st.counts.attachments} · copie giornaliere del database: {st.counts.dailyBackups}{st.dbAt ? ` (ultima ${formatDateTime(st.dbAt)})` : ''}</li>
+            </ul>
+            {st.lastError && <div className="error-box">{st.lastError}</div>}
+            <div className="row">
+              {st.folderUrl && <a className="btn btn-secondary" href={st.folderUrl} target="_blank" rel="noreferrer">Apri la cartella nel Drive</a>}
+              <button type="button" className="btn btn-primary" onClick={syncNow} disabled={busy}>{busy ? 'Sincronizzazione…' : 'Sincronizza ora'}</button>
+              {!st.fromEnv && <button type="button" className="btn btn-ghost" onClick={disconnect} disabled={busy}>Scollega</button>}
+            </div>
+          </>
+        ) : (
+          <button type="button" className="btn btn-primary btn-lg" onClick={connect} disabled={busy || !st.configured}>
+            Collega il Google Drive dell'amministratore
+          </button>
+        )}
+      </div>
+      {st.connected && !st.fromEnv && (
+        <div className="card card-pad">
+          <h3>Ripristino automatico (consigliato)</h3>
+          <p className="small muted">
+            Se l'app gira su un servizio senza disco permanente, a ogni riavvio può ripartire dall'ultima copia sul Drive.
+            Per attivarlo, copia questo codice nella variabile <code>GOOGLE_REFRESH_TOKEN</code> del server. È una chiave di accesso: non condividerla.
+          </p>
+          {token ? (
+            <textarea className="input" readOnly rows={3} value={token} onFocus={(e) => e.target.select()} style={{ fontFamily: 'monospace' }} />
+          ) : (
+            <button type="button" className="btn" onClick={showToken} disabled={busy}>Mostra il codice</button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

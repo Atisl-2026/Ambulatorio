@@ -126,6 +126,11 @@ CREATE TABLE IF NOT EXISTS activity_log (
 CREATE INDEX IF NOT EXISTS idx_log_at ON activity_log(at);
 `);
 
+// Migrazioni leggere.
+if (!db.prepare('PRAGMA table_info(files)').all().some((c) => c.name === 'drive_id')) {
+  db.exec('ALTER TABLE files ADD COLUMN drive_id TEXT');
+}
+
 const stmtCache = new Map();
 function stmt(sql) {
   let s = stmtCache.get(sql);

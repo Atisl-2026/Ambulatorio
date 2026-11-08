@@ -1,4 +1,5 @@
 import './tz.js';
+import './restore.js';
 import express from 'express';
 import helmet from 'helmet';
 import multer from 'multer';
@@ -14,7 +15,7 @@ import {
   HttpError, hashPassword, verifyPassword, checkPasswordStrength, loginBlocked, registerFailure, clearFailures, norm, str,
 } from './security.js';
 import { createSession, destroySession, sessionUser, requireAuth, requireAdmin, csrfGuard } from './auth.js';
-import { attachClient, broadcast, revokeUser, onlineCount } from './realtime.js';
+import { attachClient, broadcast, revokeUser, onlineCount, onSharedChange } from './realtime.js';
 import { logActivity } from './log.js';
 import {
   KINDS, REQUEST_STATUSES, kindDef, listVisible, serializeOne, createItem, saveDraft, discardDraft, publish, setLock,
@@ -22,6 +23,10 @@ import {
 } from './entities.js';
 import { aiConfigured, aiEnabled, summarizeRequest, askArchive, conflictReport, periodReport } from './ai.js';
 import { exportWeek, exportMonth } from './export.js';
+import { driveConfigured, SCOPES, oauthClient, exchangeCode, encrypt, revoke } from './drive.js';
+import {
+  driveStatus, runSync, scheduleSync, startDriveSync, ensureLocalFile, deleteRemote, refreshToken, resetDriveState,
+} from './driveSync.js';
 import { isISODate, mondayOf, addDays, weekKey } from '../shared/dates.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -118,6 +123,30 @@ api.post('/auth/password', requireAuth, (req, res) => {
   res.json({ user: publicUser({ ...req.user, mustChangePassword: false }) });
 });
 
+// Ritorno da Google dopo l'autorizzazione del Drive. Il cookie di sessione (SameSite=Strict)
+// non arriva in questa navigazione: l'identità è garantita dal parametro "state" monouso.
+const driveStates = new Map();
+api.get('/drive/callback', async (req, res) => {
+  const st = driveStates.get(String(req.query.state || ''));
+  driveStates.delete(String(req.query.state || ''));
+  if (!st || st.expires < Date.now()) return res.redirect('/amministrazione?drive=errore');
+  if (req.query.error || !req.query.code) return res.redirect('/amministrazione?drive=annullato');
+  try {
+    const { refreshToken: token, email } = await exchangeCode(String(req.query.code));
+    if (!token) return res.redirect('/amministrazione?drive=errore');
+    setSetting('drive_token_enc', encrypt(token), st.userId);
+    setSetting('drive_account', email || '', st.userId);
+    setSetting('drive_connected_at', now(), st.userId);
+    req.user = { id: st.userId, displayName: st.displayName };
+    logActivity(req, 'impostazioni', `Collegato il Google Drive dell'amministratore${email ? ` (${email})` : ''}`);
+    runSync().catch(() => {});
+    res.redirect('/amministrazione?drive=ok');
+  } catch (err) {
+    console.error('[Drive] collegamento non riuscito:', err?.message);
+    res.redirect('/amministrazione?drive=errore');
+  }
+});
+
 api.use(requireAuth);
 
 // ================= Tempo reale =================
@@ -172,6 +201,46 @@ api.post('/settings/logo', requireAdmin, logoUpload.single('file'), (req, res) =
   logActivity(req, 'impostazioni', 'Logo aggiornato');
   broadcast({ type: 'logo:changed' });
   res.json({ ok: true });
+});
+
+// ================= Archivio Google Drive (solo Capo) =================
+
+api.get('/drive/status', requireAdmin, (req, res) => res.json(driveStatus()));
+
+api.post('/drive/connect', requireAdmin, (req, res) => {
+  if (!driveConfigured()) {
+    throw new HttpError(400, 'Collegamento non configurato sul server: servono GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET e PUBLIC_URL.');
+  }
+  const state = crypto.randomBytes(24).toString('base64url');
+  driveStates.set(state, { userId: req.user.id, displayName: req.user.displayName, expires: Date.now() + 10 * 60 * 1000 });
+  const url = oauthClient().generateAuthUrl({ access_type: 'offline', prompt: 'consent', scope: SCOPES, state, include_granted_scopes: true });
+  res.json({ url });
+});
+
+api.post('/drive/sync', requireAdmin, async (req, res) => {
+  if (!refreshToken()) throw new HttpError(400, 'Il Google Drive non è collegato.');
+  await runSync();
+  res.json(driveStatus());
+});
+
+api.post('/drive/disconnect', requireAdmin, async (req, res) => {
+  if (process.env.GOOGLE_REFRESH_TOKEN) {
+    throw new HttpError(400, 'Il collegamento è impostato nella variabile GOOGLE_REFRESH_TOKEN del server: rimuovila per scollegare.');
+  }
+  const token = refreshToken();
+  if (token) await revoke(token);
+  for (const k of ['drive_token_enc', 'drive_account', 'drive_connected_at']) run('DELETE FROM settings WHERE key = ?', k);
+  resetDriveState();
+  logActivity(req, 'impostazioni', 'Scollegato il Google Drive (i file già archiviati restano sul Drive)');
+  res.json(driveStatus());
+});
+
+// Valore da copiare nella variabile GOOGLE_REFRESH_TOKEN per il ripristino automatico.
+api.post('/drive/token', requireAdmin, (req, res) => {
+  const token = refreshToken();
+  if (!token) throw new HttpError(400, 'Il Google Drive non è collegato.');
+  logActivity(req, 'impostazioni', 'Visualizzato il codice di collegamento del Drive');
+  res.json({ token });
 });
 
 // ================= Utenti =================
@@ -479,11 +548,11 @@ function canReadFile(user, f) {
   return !!get("SELECT 1 AS x FROM drafts WHERE kind = 'request' AND user_id = ? AND data LIKE ?", user.id, pattern);
 }
 
-api.get('/files/:id', (req, res) => {
+api.get('/files/:id', async (req, res) => {
   const f = get('SELECT * FROM files WHERE id = ?', String(req.params.id));
   if (!f || !canReadFile(req.user, f)) throw new HttpError(404, 'File non trovato.');
-  const p = path.join(UPLOAD_DIR, f.stored_name);
-  if (!fs.existsSync(p)) throw new HttpError(404, 'File non trovato.');
+  const p = await ensureLocalFile(f).catch(() => null);
+  if (!p) throw new HttpError(404, 'File non trovato.');
   const inline = req.query.inline === '1' && /^(image\/(png|jpeg|gif|webp)|application\/pdf)$/.test(f.mime);
   res.set('Content-Type', f.mime);
   res.set('X-Content-Type-Options', 'nosniff');
@@ -499,6 +568,7 @@ function cleanupOrphanFiles() {
       || get("SELECT 1 AS x FROM drafts WHERE kind = 'request' AND data LIKE ?", pattern);
     if (!used) {
       run('DELETE FROM files WHERE id = ?', f.id);
+      deleteRemote(f.drive_id);
       fs.rmSync(path.join(UPLOAD_DIR, f.stored_name), { force: true });
     }
   }
@@ -597,6 +667,9 @@ if (process.env.TLS_CERT_FILE && process.env.TLS_KEY_FILE) {
 } else {
   server = http.createServer(app);
 }
+onSharedChange(() => scheduleSync());
+startDriveSync();
+
 server.listen(PORT, () => {
   console.log(`Ambulatorio in ascolto su ${process.env.TLS_CERT_FILE ? 'https' : 'http'}://localhost:${PORT}`);
 });

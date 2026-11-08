@@ -49,8 +49,13 @@ function close(client) {
   }
 }
 
+let changeHook = null;
+// Chiamato a ogni modifica condivisa (usato per l'archivio sul Drive).
+export const onSharedChange = (fn) => { changeHook = fn; };
+
 export function broadcast(evt) {
   for (const c of clients) write(c, evt);
+  if (changeHook && evt.type !== 'logo:changed') changeHook(evt);
 }
 
 export function sendToUser(userId, evt) {
