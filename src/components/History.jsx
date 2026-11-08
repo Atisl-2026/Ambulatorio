@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, basePath } from '../api.js';
 import { Modal, Spinner } from './ui.jsx';
-import { formatDate, formatDateTime } from '../../shared/dates.js';
+import { formatDate, formatDateTime } from '@shared/dates.js';
 
 export const FIELD_LABELS = {
   request: [

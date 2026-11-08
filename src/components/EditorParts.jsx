@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Icon, LockBadge, StateBadges } from './ui.jsx';
-import { formatDateTime } from '../../shared/dates.js';
+import { formatDateTime } from '@shared/dates.js';
 import History from './History.jsx';
 
 export function EditorStatus({ ed, kindLabel }) {

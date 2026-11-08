@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
 import { api, basePath } from '../api.js';
 import { useApp, useEvent } from '../context.js';
-import { mondayOf } from '../../shared/dates.js';
+import { mondayOf } from '@shared/dates.js';
 
 const EVENT = { request: 'requests:changed', appointment: 'appointments:changed' };
 

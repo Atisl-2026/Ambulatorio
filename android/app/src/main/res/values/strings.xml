@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Ambulatorio</string>
+    <string name="launcher_name">Ambulatorio</string>
+    <string name="launch_url">https://atisl-2026.github.io/Ambulatorio/</string>
+    <string name="provider_authority">io.github.atisl2026.ambulatorio.fileprovider</string>
+    <!-- collegamento verificato con il sito (file .well-known/assetlinks.json del dominio) -->
+    <string name="asset_statements" translatable="false">
+        [{ \"relation\": [\"delegate_permission/common.handle_all_urls\"],
+           \"target\": {\"namespace\": \"web\", \"site\": \"https://atisl-2026.github.io\"} }]
+    </string>
+</resources>

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api } from '../api.js';
+import { api, openFile } from '../api.js';
 import { useApp, useEvent } from '../context.js';
 import { Icon, Modal, StateBadges, Spinner, RichText, fmtSize } from '../components/ui.jsx';
 import { useDraftEditor, toForm } from '../components/useDraftEditor.js';
 import { EditorStatus, EditorFooter } from '../components/EditorParts.jsx';
-import { formatDate, todayISO } from '../../shared/dates.js';
+import { formatDate, todayISO } from '@shared/dates.js';
 import { norm } from '../util.js';
 
 export default function Requests() {
@@ -193,7 +193,8 @@ function RequestEditor({ item, onClose }) {
             {form.attachments.map((a) => (
               <li key={a.id}>
                 <Icon name="paperclip" size={16} />
-                <a href={`/api/files/${a.id}${/pdf|image/.test(a.mime || '') ? '?inline=1' : ''}`} target="_blank" rel="noreferrer">{a.name}</a>
+                <button type="button" className="btn btn-ghost btn-sm" style={{ flex: 1, justifyContent: 'flex-start', whiteSpace: 'normal', textAlign: 'left' }}
+                  onClick={() => openFile(a).catch((e) => toast(e.message, 'error'))}>{a.name}</button>
                 <span className="small muted">{a.size ? fmtSize(a.size) : ''}</span>
                 {!readOnly && (
                   <button type="button" className="btn btn-ghost btn-sm" aria-label={`Rimuovi ${a.name}`}

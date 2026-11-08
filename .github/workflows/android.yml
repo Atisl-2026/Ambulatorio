@@ -1,0 +1,68 @@
+# Compila e firma l'app Android (APK, Trusted Web Activity) e la pubblica come
+# file scaricabile nella release "apk" del repository:
+#   https://github.com/<proprietario>/<repository>/releases/download/apk/ambulatorio.apk
+# Parte quando cambia la cartella android/ o a mano: Actions → App Android (APK) → Run workflow.
+#
+# Firma: chiave creata a ogni compilazione e poi distrutta. Una nuova versione dell'APK si installa
+# dopo aver tolto la precedente; l'APK apre l'app pubblicata, quindi l'app stessa si aggiorna da sola.
+name: App Android (APK)
+
+on:
+  push:
+    branches: [main]
+    paths: ['android/**', '.github/workflows/android.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          gradle-version: '8.14.3'
+
+      - name: Indirizzo dell'app
+        run: |
+          URL="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/"
+          HOST="${{ github.repository_owner }}.github.io"
+          HOST="${HOST,,}"
+          sed -i "s#<string name=\"launch_url\">.*</string>#<string name=\"launch_url\">$URL</string>#" android/app/src/main/res/values/strings.xml
+          sed -i "s#android:host=\"[^\"]*\" android:pathPrefix=\"[^\"]*\"#android:host=\"$HOST\" android:pathPrefix=\"/${{ github.event.repository.name }}\"#" android/app/src/main/AndroidManifest.xml
+          echo "L'APK aprirà $URL"
+
+      - name: Compila l'APK
+        run: gradle -p android assembleRelease --no-daemon --stacktrace
+
+      - name: Firma l'APK
+        run: |
+          set -euo pipefail
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          PASS=$(openssl rand -hex 24)
+          keytool -genkeypair -keystore firma.p12 -storetype PKCS12 -alias ambulatorio -keyalg RSA -keysize 3072 \
+            -validity 10950 -storepass "$PASS" -keypass "$PASS" -dname "CN=Ambulatorio, O=Apulia Diagnostic, C=IT"
+          "$BT/zipalign" -p -f 4 android/app/build/outputs/apk/release/app-release-unsigned.apk allineato.apk
+          "$BT/apksigner" sign --ks firma.p12 --ks-pass "pass:$PASS" --ks-key-alias ambulatorio \
+            --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
+            --out ambulatorio.apk allineato.apk
+          "$BT/apksigner" verify --verbose ambulatorio.apk
+          keytool -list -v -keystore firma.p12 -storepass "$PASS" -alias ambulatorio | grep 'SHA256:' | sed 's/.*SHA256: //' > impronta-sha256.txt
+          rm -f firma.p12
+
+      - name: Pubblica l'APK
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view apk >/dev/null 2>&1 || gh release create apk --title "App Android" \
+            --notes "Ultima versione dell'app Android (APK). Su iPhone: apri il sito in Safari → Condividi → Aggiungi alla schermata Home."
+          gh release upload apk ambulatorio.apk impronta-sha256.txt --clobber
+          echo "Impronta del certificato (per assetlinks.json):"; cat impronta-sha256.txt

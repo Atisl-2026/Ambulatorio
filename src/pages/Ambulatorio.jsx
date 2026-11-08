@@ -6,7 +6,7 @@ import { useDraftEditor, toForm } from '../components/useDraftEditor.js';
 import { EditorStatus, EditorFooter } from '../components/EditorParts.jsx';
 import {
   addDays, mondayOf, todayISO, weekDays, weekLabel, weekKey, DAYS_LONG, formatDate, weekdayIndex, formatDateTime, MONTHS,
-} from '../../shared/dates.js';
+} from '@shared/dates.js';
 
 function initialMonday() {
   const t = todayISO();

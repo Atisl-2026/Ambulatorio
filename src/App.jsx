@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { api, setUnauthorizedHandler } from './api.js';
+import { api, setUnauthorizedHandler, currentUser, logout as apiLogout, setupStatus } from './api.js';
+import { supabase, SUPABASE_URL } from './supabase.js';
 import { AppContext, bus } from './context.js';
-import { Icon, Logo, LockedAlert, Toasts, ConfirmDialog, Spinner } from './components/ui.jsx';
+import { Icon, Logo, LockedAlert, Toasts, ConfirmDialog, Spinner, Modal } from './components/ui.jsx';
 import Welcome from './pages/Welcome.jsx';
-import Login, { ChangePasswordForm } from './pages/Login.jsx';
+import Login, { ChangePasswordForm, FirstAdminForm } from './pages/Login.jsx';
 import Requests from './pages/Requests.jsx';
 import Ambulatorio from './pages/Ambulatorio.jsx';
 import Archive from './pages/Archive.jsx';
 import Admin from './pages/Admin.jsx';
-import { Modal } from './components/ui.jsx';
 
 const PAGES = [
   { path: '/richieste', label: 'Richieste' },
@@ -16,17 +16,21 @@ const PAGES = [
   { path: '/archivio', label: 'Archivio' },
   { path: '/amministrazione', label: 'Amministrazione', admin: true },
 ];
+const IDLE_MS = 2 * 60 * 60 * 1000; // uscita automatica dopo 2 ore di inattività
 
+// Navigazione con "#/percorso": funziona su GitHub Pages e nelle app installate.
+const readPath = () => (window.location.hash.replace(/^#/, '').split('?')[0]) || '/';
 function usePath() {
-  const [path, setPath] = useState(window.location.pathname);
+  const [path, setPath] = useState(readPath);
   useEffect(() => {
-    const onPop = () => setPath(window.location.pathname);
-    window.addEventListener('popstate', onPop);
-    return () => window.removeEventListener('popstate', onPop);
+    const on = () => setPath(readPath());
+    window.addEventListener('hashchange', on);
+    return () => window.removeEventListener('hashchange', on);
   }, []);
   const navigate = useCallback((to, { replace = false } = {}) => {
-    if (to === window.location.pathname) return;
-    window.history[replace ? 'replaceState' : 'pushState']({}, '', to);
+    if (to === readPath()) return;
+    if (replace) window.history.replaceState({}, '', `#${to}`);
+    else window.history.pushState({}, '', `#${to}`);
     setPath(to);
     window.scrollTo(0, 0);
   }, []);
@@ -36,6 +40,7 @@ function usePath() {
 export default function App() {
   const [path, navigate] = usePath();
   const [user, setUser] = useState(undefined); // undefined = verifica in corso
+  const [needsSetup, setNeedsSetup] = useState(false);
   const [settings, setSettings] = useState({ aiEnabled: false, statuses: [] });
   const [doctors, setDoctors] = useState([]);
   const [directory, setDirectory] = useState([]);
@@ -43,7 +48,7 @@ export default function App() {
   const [locked, setLocked] = useState(null);
   const [confirmState, setConfirmState] = useState(null);
   const [live, setLive] = useState(false);
-  const [logoVersion, setLogoVersion] = useState(0);
+  const [logoVersion, setLogoVersion] = useState(() => Date.now());
   const [menuOpen, setMenuOpen] = useState(false);
   const [pwOpen, setPwOpen] = useState(false);
 
@@ -63,13 +68,21 @@ export default function App() {
 
   const showLocked = useCallback((message) => setLocked({ message }), []);
 
-  // Verifica sessione all'avvio.
+  // Verifica sessione all'avvio (e se serve creare il primo amministratore).
   useEffect(() => {
-    api.get('/auth/me').then((r) => setUser(r.user)).catch(() => setUser(null));
+    currentUser().then(async (u) => {
+      setUser(u);
+      if (!u) setNeedsSetup(await setupStatus().then((s) => s.needsSetup, () => false));
+    }).catch(() => setUser(null));
+    const { data: sub } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_OUT') setUser(null);
+    });
+    return () => sub.subscription.unsubscribe();
   }, []);
 
   useEffect(() => {
     setUnauthorizedHandler(() => {
+      supabase.auth.signOut().catch(() => {});
       setUser((u) => {
         if (u) toast('Sessione scaduta: effettua di nuovo l\'accesso.', 'error');
         return null;
@@ -90,49 +103,83 @@ export default function App() {
     if (ready) loadShared().catch(() => {});
   }, [ready, loadShared]);
 
-  // Connessione in tempo reale (Server-Sent Events).
-  const firstHello = useRef(true);
+  // Il Capo comunica al database l'indirizzo delle funzioni cloud (serve all'invio mensile automatico).
+  useEffect(() => {
+    if (ready && user.role === 'admin') {
+      supabase.rpc('register_functions_url', { p_url: `${SUPABASE_URL.replace(/\/$/, '')}/functions/v1` }).then(() => {}, () => {});
+    }
+  }, [ready, user]);
+
+  // Tempo reale: ascolto degli eventi pubblicati dal database.
+  const firstSub = useRef(true);
   useEffect(() => {
     if (!ready) return undefined;
-    firstHello.current = true;
-    const es = new EventSource('/api/events');
-    es.onmessage = (e) => {
-      let evt;
-      try { evt = JSON.parse(e.data); } catch { return; }
-      if (evt.type === 'hello') {
-        setLive(true);
-        // Dopo una riconnessione ricarichiamo tutto per non perdere eventi.
-        if (!firstHello.current) bus.emit({ type: 'resync' });
-        firstHello.current = false;
-        return;
-      }
-      if (evt.type === 'session:revoked') {
-        es.close();
-        setLive(false);
-        setUser(null);
-        toast('La tua sessione è stata chiusa dall\'amministratore o è scaduta.', 'error');
-        return;
-      }
-      if (evt.type === 'settings:changed') api.get('/settings').then(setSettings).catch(() => {});
-      if (evt.type === 'doctors:changed') api.get('/doctors').then(setDoctors).catch(() => {});
-      if (evt.type === 'users:changed') api.get('/users/directory').then(setDirectory).catch(() => {});
-      if (evt.type === 'logo:changed') setLogoVersion((v) => v + 1);
-      bus.emit(evt);
-    };
-    es.onerror = () => {
+    firstSub.current = true;
+    let channel;
+    (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) supabase.realtime.setAuth(session.access_token);
+      channel = supabase.channel('ambulatorio-eventi')
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'events' }, ({ new: row }) => {
+          const evt = { type: row.type, ...(row.payload || {}) };
+          if (evt.type === 'session:revoked') {
+            apiLogout().finally(() => setUser(null));
+            toast('La tua sessione è stata chiusa dall\'amministratore.', 'error');
+            return;
+          }
+          if (evt.type === 'settings:changed') api.get('/settings').then(setSettings).catch(() => {});
+          if (evt.type === 'doctors:changed') api.get('/doctors').then(setDoctors).catch(() => {});
+          if (evt.type === 'users:changed') api.get('/users/directory').then(setDirectory).catch(() => {});
+          if (evt.type === 'logo:changed') setLogoVersion(Date.now());
+          bus.emit(evt);
+        })
+        .subscribe((status) => {
+          if (status === 'SUBSCRIBED') {
+            setLive(true);
+            // Dopo una riconnessione ricarichiamo tutto per non perdere eventi.
+            if (!firstSub.current) bus.emit({ type: 'resync' });
+            firstSub.current = false;
+          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+            setLive(false);
+          }
+        });
+    })();
+    // Il token di accesso si rinnova: lo passiamo anche al canale in tempo reale.
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'TOKEN_REFRESHED' && session) supabase.realtime.setAuth(session.access_token);
+    });
+    const onFocus = () => bus.emit({ type: 'resync' });
+    window.addEventListener('online', onFocus);
+    return () => {
+      sub.subscription.unsubscribe();
+      window.removeEventListener('online', onFocus);
+      if (channel) supabase.removeChannel(channel);
       setLive(false);
-      // Se la sessione non è più valida EventSource continuerebbe a riprovare: verifichiamo.
-      api.get('/auth/me').then((r) => { if (!r.user) { es.close(); setUser(null); } }).catch(() => {});
     };
-    return () => { es.close(); setLive(false); };
   }, [ready, toast]);
+
+  // Uscita automatica per inattività.
+  useEffect(() => {
+    if (!user) return undefined;
+    let last = Date.now();
+    const touch = () => { last = Date.now(); };
+    const events = ['pointerdown', 'keydown', 'touchstart', 'scroll'];
+    events.forEach((e) => window.addEventListener(e, touch, { passive: true }));
+    const t = setInterval(() => {
+      if (Date.now() - last > IDLE_MS) {
+        apiLogout().finally(() => setUser(null));
+        toast('Sei stato disconnesso per inattività.', 'info');
+      }
+    }, 60000);
+    return () => { clearInterval(t); events.forEach((e) => window.removeEventListener(e, touch)); };
+  }, [user, toast]);
 
   useEffect(() => {
     if (ready && user.role !== 'admin' && path.startsWith('/amministrazione')) navigate('/richieste', { replace: true });
   }, [ready, user, path, navigate]);
 
   const logout = async () => {
-    try { await api.post('/auth/logout'); } catch { /* già uscito */ }
+    await apiLogout();
     setUser(null);
     navigate('/login');
   };
@@ -147,6 +194,17 @@ export default function App() {
     content = <Welcome onEnter={() => navigate(user ? '/richieste' : '/login')} logoVersion={logoVersion} />;
   } else if (user === undefined) {
     content = <div className="welcome"><Spinner /></div>;
+  } else if (!user && needsSetup) {
+    content = (
+      <div className="welcome">
+        <div className="card login-card">
+          <Logo className="welcome-logo" version={logoVersion} />
+          <h1 style={{ textAlign: 'center' }}>Primo avvio</h1>
+          <p className="muted small">Non esiste ancora nessun account: crea quello del Capo (amministratore). Potrà poi creare gli account degli operatori.</p>
+          <FirstAdminForm onDone={async (u) => { setNeedsSetup(false); setUser(u); navigate('/amministrazione', { replace: true }); }} />
+        </div>
+      </div>
+    );
   } else if (!user) {
     content = (
       <Login
@@ -190,6 +248,7 @@ export default function App() {
                   {p.label}
                 </button>
               ))}
+              <button type="button" className="nav-mobile-only" onClick={() => { setPwOpen(true); setMenuOpen(false); }}>Cambia password</button>
             </nav>
             <div className="header-user">
               <span className={`live-dot ${live ? 'on' : ''}`} title={live ? 'Sincronizzato in tempo reale' : 'Connessione in tempo reale assente: riconnessione…'} />
@@ -197,7 +256,7 @@ export default function App() {
                 <strong>{user.displayName}</strong>
                 <span>{user.role === 'admin' ? 'Amministratore · il Capo' : 'Operatore'}</span>
               </div>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setPwOpen(true)}>Password</button>
+              <button type="button" className="btn btn-ghost btn-sm hide-mobile" onClick={() => setPwOpen(true)}>Password</button>
               <button type="button" className="btn btn-ghost btn-icon" onClick={logout} title="Esci" aria-label="Esci">
                 <Icon name="logout" />
               </button>

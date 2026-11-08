@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, basePath } from '../api.js';
+import { api, basePath, openFile } from '../api.js';
 import { useApp, useEvent } from '../context.js';
 import { Icon, Modal, Spinner, LockBadge, StateBadges } from '../components/ui.jsx';
 import { VersionList, FIELD_LABELS, fieldValue } from '../components/History.jsx';
-import { formatDate, formatDateTime, weekLabel, addDays } from '../../shared/dates.js';
+import { formatDate, formatDateTime, weekLabel, addDays } from '@shared/dates.js';
 
 export default function Archive() {
   const [tab, setTab] = useState('items');
@@ -182,7 +182,11 @@ function ArchiveDetail({ kind, id, onClose }) {
                 <dt>{label}</dt>
                 <dd>
                   {k === 'attachments' && data.attachments.length
-                    ? data.attachments.map((a) => <div key={a.id}><a href={`/api/files/${a.id}`}>{a.name}</a></div>)
+                    ? data.attachments.map((a) => (
+                      <div key={a.id}>
+                        <button type="button" className="btn btn-ghost btn-sm" onClick={() => openFile(a).catch((e) => toast(e.message, 'error'))}>{a.name}</button>
+                      </div>
+                    ))
                     : fieldValue(k, data[k])}
                 </dd>
               </div>

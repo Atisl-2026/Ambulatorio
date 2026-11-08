@@ -4,7 +4,7 @@ import { useApp, useEvent } from '../context.js';
 import { Icon, Modal, Spinner, Switch, RichText, Logo } from '../components/ui.jsx';
 import {
   formatDateTime, todayISO, mondayOf, addDays, weekKey, weekLabel, MONTHS, formatDate,
-} from '../../shared/dates.js';
+} from '@shared/dates.js';
 
 const TABS = [
   ['users', 'Utenti'],
@@ -66,6 +66,7 @@ function Users() {
   const toggleActive = async (u) => {
     try {
       await api.patch(`/users/${u.id}`, { active: !u.active });
+      load();
       toast(u.active ? `Account di ${u.displayName} disattivato: la sessione è stata chiusa.` : `Account di ${u.displayName} riattivato.`, 'success');
     } catch (err) {
       toast(err.message, 'error');
@@ -110,7 +111,7 @@ function Users() {
           </table>
         </div>
       )}
-      {edit && <UserForm user={edit.id ? edit : null} onClose={() => setEdit(null)} />}
+      {edit && <UserForm user={edit.id ? edit : null} onClose={(saved) => { setEdit(null); if (saved) load(); }} />}
     </>
   );
 }
@@ -136,7 +137,7 @@ function UserForm({ user, onClose }) {
         await api.post('/users', f);
         toast(`Account creato. Comunica all'utente la password temporanea: ${f.password}`, 'success');
       }
-      onClose();
+      onClose(true);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -186,7 +187,7 @@ function UserForm({ user, onClose }) {
 // ================= Medici =================
 
 function Doctors() {
-  const { doctors, toast } = useApp();
+  const { doctors, toast, reloadShared } = useApp();
   const [name, setName] = useState('');
   const [specialty, setSpecialty] = useState('');
   const [edit, setEdit] = useState(null);
@@ -195,6 +196,7 @@ function Doctors() {
     e.preventDefault();
     try {
       await api.post('/doctors', { name, specialty });
+      reloadShared();
       setName('');
       setSpecialty('');
       toast('Medico aggiunto.', 'success');
@@ -205,6 +207,7 @@ function Doctors() {
   const update = async (d, patch) => {
     try {
       await api.patch(`/doctors/${d.id}`, patch);
+      reloadShared();
       toast('Medico aggiornato.', 'success');
       setEdit(null);
     } catch (err) {
@@ -364,7 +367,7 @@ function AiPanel() {
         </p>
         {settings.aiEnabled && settings.aiConfigured === false && (
           <div className="error-box" style={{ marginTop: 12, marginBottom: 0 }}>
-            Chiave API non configurata sul server: imposta la variabile d'ambiente ANTHROPIC_API_KEY e riavvia l'applicazione.
+            Chiave API dell'IA non configurata: aggiungi il segreto ANTHROPIC_API_KEY (vedi README, sezione Intelligenza artificiale).
           </div>
         )}
       </div>
@@ -516,7 +519,7 @@ function ActivityLog() {
         <>
           <div className="card table-wrap">
             <table className="table responsive">
-              <thead><tr><th>Data e ora</th><th>Utente</th><th>Azione</th><th>Dettagli</th><th>IP</th></tr></thead>
+              <thead><tr><th>Data e ora</th><th>Utente</th><th>Azione</th><th>Dettagli</th></tr></thead>
               <tbody>
                 {data.rows.map((r) => (
                   <tr key={r.id}>
@@ -524,10 +527,9 @@ function ActivityLog() {
                     <td data-label="Utente">{r.user_name || '—'}</td>
                     <td data-label="Azione"><span className={`badge ${/blocco|eliminazione|fallito/.test(r.action) && !r.action.startsWith('sblocco') ? 'badge-locked' : ''}`}>{ACTION_LABELS[r.action] || r.action}</span></td>
                     <td data-label="Dettagli">{r.details}</td>
-                    <td data-label="IP" className="small muted">{r.ip}</td>
                   </tr>
                 ))}
-                {data.rows.length === 0 && <tr><td colSpan={5} className="empty">Nessuna attività.</td></tr>}
+                {data.rows.length === 0 && <tr><td colSpan={4} className="empty">Nessuna attività.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -573,10 +575,10 @@ function SettingsPanel() {
       <div className="card card-pad">
         <h3>Stato del sistema</h3>
         <ul className="small" style={{ paddingLeft: 18 }}>
-          <li>Utenti collegati in tempo reale: <b>{settings.online ?? '—'}</b></li>
           <li>Intelligenza artificiale: <b>{settings.aiEnabled ? 'attiva' : 'disattivata'}</b></li>
-          <li>Accesso solo autenticato, sessioni con scadenza per inattività, password cifrate (scrypt).</li>
-          <li>Permessi verificati dal server su ogni operazione.</li>
+          <li>Dati conservati su Supabase (database protetto con accesso solo autenticato).</li>
+          <li>Permessi, bozze e blocchi verificati dal database su ogni operazione.</li>
+          <li>Uscita automatica dopo 2 ore di inattività.</li>
         </ul>
       </div>
     </div>
@@ -634,15 +636,15 @@ function BackupPanel() {
     if (!file) return;
     const ok = await confirm({
       title: 'Ripristinare l\'archivio da questo backup?',
-      message: `File: ${file.name}\n\nTutti i dati attuali (richieste, appuntamenti, utenti, allegati, registro) verranno SOSTITUITI con quelli del backup. Prima del ripristino il server salva automaticamente una copia di sicurezza dello stato attuale.\n\nAl termine tutti gli utenti dovranno accedere di nuovo.`,
+      message: `File: ${file.name}\n\nTutti i dati attuali (richieste, appuntamenti, medici, allegati, registro) verranno SOSTITUITI con quelli del backup. Gli account degli utenti restano quelli attuali.\n\nConsiglio: prima scarica un backup dello stato attuale.`,
       confirmLabel: 'Ripristina',
       danger: true,
       requireText: 'RIPRISTINA',
     });
     if (!ok) return;
     act('restore', async () => {
-      await api.upload('/backup/restore', file);
-      toast('Archivio ripristinato. Accedi di nuovo.', 'success');
+      const r = await api.upload('/backup/restore', file);
+      toast(`Archivio ripristinato (${r.files} allegati).`, 'success');
     });
   };
 
@@ -654,11 +656,11 @@ function BackupPanel() {
         <p className="small muted">
           Il giorno 1 di ogni mese, dalle ore {ms.sendHour}:00, l'app invia per email il calendario Excel del mese appena concluso
           (es. <b>Ambulatorio_{monthLabel(lastMonthISO()).replace(' ', '_')}.xlsx</b>) agli indirizzi indicati.
-          L'email parte dalla casella di posta dell'ufficio{ms.from ? <> (<b>{ms.from}</b>)</> : null}. Se quel giorno il server è spento, l'invio avviene appena riparte.
+          L'email parte dalla casella di posta dell'ufficio{ms.from ? <> (<b>{ms.from}</b>)</> : null}, anche se nessuno ha l'app aperta.
         </p>
         {!ms.configured && (
           <div className="info-banner">
-            Invio email non ancora configurato sul server: servono i dati della casella di posta dell'ufficio (SMTP_HOST, SMTP_USER, SMTP_PASS — vedi README).
+            Invio email non ancora configurato: servono i dati della casella di posta dell'ufficio (SMTP_HOST, SMTP_USER, SMTP_PASS — vedi README, sezione Email).
           </div>
         )}
         <div className="field">
@@ -686,7 +688,7 @@ function BackupPanel() {
       <div className="card card-pad">
         <h3>Backup completo dell'archivio</h3>
         <p className="small muted">
-          Un unico file .zip con tutto: database (richieste, appuntamenti, cronologia, utenti, registro attività), allegati e logo.
+          Un unico file .zip con tutto l'archivio: richieste, appuntamenti, cronologia, medici, registro attività e allegati.
           Scaricalo periodicamente e conservalo in un luogo sicuro (es. chiavetta o PC dell'ufficio): contiene dati sanitari.
         </p>
         <div className="row">

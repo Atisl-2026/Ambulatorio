@@ -1,0 +1,130 @@
+# Pubblica tutto a ogni modifica su "main":
+#   1. Supabase: database (tabelle, permessi, regole), funzioni cloud, segreti e impostazioni di accesso
+#   2. App web su GitHub Pages (installabile su Android e iPhone)
+#
+# Segreti da impostare una volta in GitHub → Settings → Secrets and variables → Actions:
+#   SUPABASE_ACCESS_TOKEN   token personale di Supabase (Account → Access Tokens)
+#   SUPABASE_PROJECT_REF    codice del progetto (Project Settings → General → Project ID)
+#   SUPABASE_DB_PASSWORD    password del database scelta alla creazione del progetto
+# Facoltativi (email mensile e IA): SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, MAIL_FROM, ANTHROPIC_API_KEY
+#
+# Prima volta: Settings → Pages → Build and deployment → Source: "GitHub Actions".
+name: Pubblica l'app
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['android/**', '.github/workflows/android.yml', 'README.md']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pubblica
+  cancel-in-progress: false
+
+env:
+  SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+  SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+  PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+
+jobs:
+  supabase:
+    name: Database e funzioni (Supabase)
+    runs-on: ubuntu-latest
+    outputs:
+      url: ${{ steps.keys.outputs.url }}
+      key: ${{ steps.keys.outputs.key }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Controlla i segreti
+        run: |
+          missing=""
+          for v in SUPABASE_ACCESS_TOKEN SUPABASE_DB_PASSWORD PROJECT_REF; do
+            [ -n "${!v}" ] || missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Mancano i segreti GitHub:$missing (vedi README, sezione Installazione)"
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Collega il progetto Supabase
+        run: npx supabase link --project-ref "$PROJECT_REF"
+
+      - name: Aggiorna il database
+        run: npx supabase db push --include-all
+
+      - name: Pubblica le funzioni cloud
+        run: npx supabase functions deploy --project-ref "$PROJECT_REF"
+
+      - name: Segreti delle funzioni (email e IA)
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          : > segreti.env
+          for v in SMTP_HOST SMTP_PORT SMTP_USER SMTP_PASS MAIL_FROM ANTHROPIC_API_KEY; do
+            [ -n "${!v}" ] && printf '%s=%s\n' "$v" "${!v}" >> segreti.env
+          done
+          if [ -s segreti.env ]; then npx supabase secrets set --env-file segreti.env --project-ref "$PROJECT_REF"; else echo "Nessun segreto facoltativo impostato."; fi
+          rm -f segreti.env
+
+      - name: Impostazioni di accesso (niente registrazioni libere, password lunghe)
+        run: |
+          SITE="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/"
+          curl -sSf -X PATCH "https://api.supabase.com/v1/projects/$PROJECT_REF/config/auth" \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" -H "Content-Type: application/json" \
+            -d "{\"disable_signup\": true, \"password_min_length\": 10, \"site_url\": \"$SITE\", \"mailer_autoconfirm\": true}" > /dev/null
+          echo "Accesso configurato per $SITE"
+
+      - name: Indirizzo e chiave pubblica per l'app
+        id: keys
+        run: |
+          KEYS=$(curl -sSf "https://api.supabase.com/v1/projects/$PROJECT_REF/api-keys" -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN")
+          KEY=$(echo "$KEYS" | jq -r '[.[] | select(.type == "publishable")][0].api_key // empty')
+          [ -n "$KEY" ] || KEY=$(echo "$KEYS" | jq -r '.[] | select(.name == "anon") | .api_key')
+          echo "url=https://$PROJECT_REF.supabase.co" >> "$GITHUB_OUTPUT"
+          echo "key=$KEY" >> "$GITHUB_OUTPUT"
+
+  web:
+    name: App web (GitHub Pages)
+    needs: supabase
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Compila l'app
+        run: npm run build
+        env:
+          VITE_SUPABASE_URL: ${{ needs.supabase.outputs.url }}
+          VITE_SUPABASE_ANON_KEY: ${{ needs.supabase.outputs.key }}
+          VITE_APK_URL: https://github.com/${{ github.repository }}/releases/download/apk/ambulatorio.apk
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist
+      - name: Pubblica su GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

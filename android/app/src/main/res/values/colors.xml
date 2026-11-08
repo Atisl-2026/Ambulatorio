@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- giallo del logo e sfondo dell'app web -->
+    <color name="colorPrimary">#FFED00</color>
+    <color name="navigationColor">#FFFFFF</color>
+    <color name="backgroundColor">#F6F6F1</color>
+    <color name="iconBackground">#FFED00</color>
+</resources>

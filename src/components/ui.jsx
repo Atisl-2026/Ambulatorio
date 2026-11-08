@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
+import { logoUrl } from '../supabase.js';
+
+const PLACEHOLDER = `${import.meta.env.BASE_URL}logo-placeholder.svg`;
 
 // ---------- Icone (SVG inline) ----------
 const paths = {
@@ -27,8 +30,18 @@ export function Icon({ name, size = 18, title }) {
   );
 }
 
+// Logo caricato dal Capo (Storage pubblico); se non c'è, segnaposto incluso nell'app.
 export function Logo({ className = 'header-logo', version = 0 }) {
-  return <img className={className} src={`/logo?v=${version}`} alt="èpaca Coldiretti – Aggiungiamo valore al valore · Apulia Diagnostic" />;
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [version]);
+  return (
+    <img
+      className={className}
+      src={failed ? PLACEHOLDER : logoUrl(version)}
+      onError={() => setFailed(true)}
+      alt="èpaca Coldiretti – Aggiungiamo valore al valore · Apulia Diagnostic"
+    />
+  );
 }
 
 // ---------- Badge ----------

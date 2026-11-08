@@ -118,6 +118,7 @@ textarea.input { min-height: 110px; resize: vertical; }
 .live-dot { width: 10px; height: 10px; border-radius: 50%; background: #aaa; display: inline-block; flex: none; }
 .live-dot.on { background: #4caf50; box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.2); }
 .menu-toggle { display: none; }
+.nav .nav-mobile-only { display: none; }
 
 @media (max-width: 900px) {
   .menu-toggle { display: inline-flex; }
@@ -129,6 +130,8 @@ textarea.input { min-height: 110px; resize: vertical; }
   .nav.open { display: flex; }
   .nav button { text-align: left; }
   .user-chip { display: none; }
+  .hide-mobile { display: none; }
+  .nav .nav-mobile-only { display: block; }
   .header-logo { height: 38px; }
 }
 

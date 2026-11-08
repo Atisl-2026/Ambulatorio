@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { api } from '../api.js';
+import { login, changePassword, createFirstAdmin } from '../api.js';
 import { Logo } from '../components/ui.jsx';
 
 export default function Login({ onLogin, logoVersion }) {
@@ -13,8 +13,7 @@ export default function Login({ onLogin, logoVersion }) {
     setError('');
     setBusy(true);
     try {
-      const r = await api.post('/auth/login', { username, password });
-      onLogin(r.user);
+      onLogin(await login(username, password));
     } catch (err) {
       setError(err.message);
     } finally {
@@ -58,8 +57,7 @@ export function ChangePasswordForm({ onDone }) {
     if (next !== repeat) return setError('Le due password non coincidono.');
     setBusy(true);
     try {
-      const r = await api.post('/auth/password', { current, next });
-      onDone(r.user);
+      onDone(await changePassword(current, next));
     } catch (err) {
       setError(err.message);
     } finally {
@@ -84,6 +82,54 @@ export function ChangePasswordForm({ onDone }) {
         <input id="pr" className="input" type="password" value={repeat} onChange={(e) => setRepeat(e.target.value)} autoComplete="new-password" required />
       </div>
       <button type="submit" className="btn btn-primary" disabled={busy} style={{ width: '100%' }}>Salva password</button>
+    </form>
+  );
+}
+
+export function FirstAdminForm({ onDone }) {
+  const [username, setUsername] = useState('capo');
+  const [displayName, setDisplayName] = useState('Il Capo');
+  const [password, setPassword] = useState('');
+  const [repeat, setRepeat] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError('');
+    if (password !== repeat) return setError('Le due password non coincidono.');
+    setBusy(true);
+    try {
+      await createFirstAdmin({ username, displayName, password });
+      onDone(await login(username, password));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form onSubmit={submit}>
+      {error && <div className="error-box" role="alert">{error}</div>}
+      <div className="field">
+        <label htmlFor="fa-u">Nome utente del Capo</label>
+        <input id="fa-u" className="input" value={username} onChange={(e) => setUsername(e.target.value)} autoCapitalize="none" required />
+      </div>
+      <div className="field">
+        <label htmlFor="fa-n">Nome visualizzato</label>
+        <input id="fa-n" className="input" value={displayName} onChange={(e) => setDisplayName(e.target.value)} required />
+      </div>
+      <div className="field">
+        <label htmlFor="fa-p">Password</label>
+        <input id="fa-p" className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" required />
+        <span className="hint">Almeno 10 caratteri, con lettere e numeri.</span>
+      </div>
+      <div className="field">
+        <label htmlFor="fa-r">Ripeti password</label>
+        <input id="fa-r" className="input" type="password" value={repeat} onChange={(e) => setRepeat(e.target.value)} autoComplete="new-password" required />
+      </div>
+      <button type="submit" className="btn btn-primary btn-lg" style={{ width: '100%' }} disabled={busy}>Crea account del Capo</button>
     </form>
   );
 }
